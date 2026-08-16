@@ -1,50 +1,190 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+<!--
+SYNC IMPACT REPORT
+Version change: (none) → 1.0.0
+Rationale: Initial ratification of the ClaudeDriver constitution.
+Modified principles: n/a (initial adoption)
+Added sections:
+  - Core Principles (7): Security-First & Fail-Safe; Spec-Driven & Test-Backed;
+    Single Shared Contract; Outbound-Only Agents & Explicit Enrollment;
+    Resilient Real-Time Delivery; Full Auditability & Observability;
+    Resource & Cost Discipline
+  - Technology & Architecture Constraints
+  - Development Workflow & Quality Gates
+  - Governance
+Removed sections: none
+Templates reviewed:
+  - .specify/templates/plan-template.md ✅ (Constitution Check gate references these principles)
+  - .specify/templates/spec-template.md ✅
+  - .specify/templates/tasks-template.md ✅
+Deferred TODOs: none
+-->
+
+# ClaudeDriver Constitution
+
+ClaudeDriver is a self-hostable control plane that monitors and remotely operates multiple
+Claude Code instances running across developer machines (Windows and macOS), surfacing prompts,
+questions, and status to a web and mobile UI, and letting an authorized operator answer, approve,
+and dispatch work while away from those machines. Because the system can answer permission prompts
+and dispatch tasks to coding agents, it is a **remote-code-execution control plane over a developer
+fleet**. That fact governs every principle below.
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Security-First & Fail-Safe (NON-NEGOTIABLE)
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+The system grants remote code execution over developer machines; it MUST be designed as a
+crown-jewel asset with minimized blast radius.
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+- Agents MUST authenticate to the backend with per-device identity (mTLS client certificates
+  issued at enrollment). Bearer tokens alone MUST NOT be the sole agent credential.
+- Operators MUST authenticate with strong AuthN (OIDC/SSO or passkey/TOTP). Answering prompts or
+  dispatching tasks is a fleet-admin capability and MUST be gated accordingly.
+- Authorization MUST be least-privilege and scoped per operator × machine × project × action.
+- **Fail-safe, never fail-open:** when a decision path is unreachable, times out, or is ambiguous,
+  the system MUST default to the SAFE outcome (deny / hold). A permission prompt MUST NEVER be
+  auto-approved by timeout, absence of response, or component failure.
+- Secrets (tokens, certs, connection strings, push keys) MUST live in a secret store or an
+  untracked `.env`; they MUST NEVER be committed to the repository.
+- Any capability to answer prompts or run tasks MUST be constrained to the intended coding-agent
+  interaction surface, not a general "run anything" primitive.
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+Rationale: a single forged command or backend compromise equals fleet-wide RCE; safety must be the
+default state, not the happy path.
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+### II. Spec-Driven & Test-Backed Development (NON-NEGOTIABLE)
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+Every feature MUST flow through the Spec Kit lifecycle — `specify` → `plan` → `tasks` →
+`implement` — before implementation. No production code is written without an approved spec and
+plan that pass the Constitution Check.
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+- Contract and integration tests MUST exist for every cross-component boundary (agent↔backend,
+  backend↔client, hook↔backend) and MUST be written before or alongside the implementation they
+  cover, not after.
+- Security-relevant behavior (auth, scope enforcement, fail-safe defaults, audit emission) MUST
+  have explicit tests; it is not "done" until proven by test.
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+Rationale: the risk profile forbids ad-hoc changes; specs and tests are the control that keeps a
+high-consequence system honest.
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+### III. Single Shared Contract
+
+The wire protocol and its data types MUST be defined exactly once and reused everywhere.
+
+- Protocol DTOs MUST be authored in a shared Kotlin module (`kotlinx.serialization`, `commonMain`)
+  consumed by the backend, the per-machine agent, and the Compose Multiplatform app.
+- The protocol MUST be explicitly versioned; backward-incompatible changes MUST bump the protocol
+  version and be negotiated at connection time.
+- No component may hand-maintain a divergent copy of a shared type.
+
+Rationale: a small team cannot afford N drifting copies of the contract; one source of truth
+prevents whole classes of integration bugs.
+
+### IV. Outbound-Only Agents & Explicit Enrollment
+
+Developer machines MUST NOT accept inbound connections for this system.
+
+- The per-machine agent MUST initiate a persistent OUTBOUND connection to the backend. No inbound
+  ports, firewall changes, or port-forwarding on developer machines are permitted.
+- A machine MUST become known through explicit, operator-approved enrollment that establishes
+  device identity. Network discovery (e.g. mDNS) MAY suggest candidates but MUST NEVER, by itself,
+  confer trust or membership.
+
+Rationale: outbound-only removes the NAT/firewall attack surface and matches how trustworthy
+control planes onboard nodes.
+
+### V. Resilient Real-Time Delivery
+
+Alerts are only useful if they are trustworthy; the transport MUST be built for flaky links.
+
+- Every persistent connection MUST use heartbeat/ping-pong liveness detection and reconnect with
+  exponential backoff + jitter.
+- Events MUST carry per-source monotonic sequence IDs; clients MUST be able to resume/replay missed
+  events after reconnect.
+- Commands (approve, deny, send-task) MUST be idempotent and de-duplicated by command ID; delivery
+  may occur more than once.
+- Connections MUST apply bounded queues and state coalescing (send latest snapshot, not every
+  delta) under load.
+
+Rationale: "you'll be alerted when a machine needs you" is a promise that fails silently without
+these guarantees.
+
+### VI. Full Auditability & Observability
+
+Every consequential action MUST be attributable and reconstructable after the fact.
+
+- Every command and prompt answer MUST be recorded to an append-only, tamper-evident audit log:
+  who, which machine/session/project, what action, the decision, when, and the result.
+- Session and machine state changes MUST be observable in real time and retained for history.
+- The system MUST NOT rely on parsing Claude Code's internal transcript files as a stable API;
+  state MUST be reconstructed from hook events and supported CLI/SDK outputs.
+
+Rationale: an RCE tool without a complete audit trail is unaccountable and undiagnosable.
+
+### VII. Resource & Cost Discipline
+
+The hosted footprint MUST stay small and predictable.
+
+- Components MUST be efficient at rest — thousands of mostly-idle connections MUST NOT translate
+  into proportional CPU/memory or cost.
+- Cloud resources MUST prefer minimal SKUs and scale-to-idle where available; any resource that
+  incurs ongoing cost MUST be justified in the plan.
+- Per-connection memory, polling intervals, and event volume MUST be bounded and reviewed.
+
+Rationale: the operator explicitly constrains hosting cost; efficiency is a first-class design
+requirement, not an afterthought.
+
+## Technology & Architecture Constraints
+
+- **Backend:** Kotlin on the JVM using Ktor (coroutine-native, WebSocket-first). Persistence in
+  PostgreSQL with Flyway migrations. Hosted on Azure with minimal, scale-aware SKUs.
+- **Per-machine agent:** a Kotlin/JVM daemon installed as a Windows Service / macOS launchd
+  service, using OSHI for cross-platform process detection (name, args, working directory,
+  lifecycle). Ships the same shared protocol module as the backend.
+- **Web UI:** React + TypeScript (Vite), TanStack Query as the server-state cache fed by a
+  WebSocket layer, minimal local UI state (e.g. Zustand). A live, virtualized machine/session
+  board plus an alert inbox.
+- **Mobile UI:** Compose Multiplatform (iOS + Android), sharing networking and DTOs with the
+  backend. Designed **remote-by-default** — it MUST NOT depend on direct LAN reachability of the
+  backend, and MUST NOT rely on the iOS Local Network permission for core function.
+- **Claude Code integration:** HTTP hooks are the integration surface — `Notification` and `Stop`
+  for detection, a blocking `PreToolUse` hook for remote approval, `SessionStart`/`SessionEnd` for
+  registry. Hook target URLs MUST be allowlisted; hook auth headers MUST use env-var interpolation,
+  never inline secrets. Answering arbitrary free-form questions remotely is out of scope for the
+  hook-based mode and, if ever required, MUST be delivered via an Agent-SDK-managed session mode
+  specified separately.
+- **Remote access & push:** the operator is typically off-network. Interactive access reaches the
+  Azure-hosted backend directly (hardened, never left unauthenticated); background alerts reach the
+  operator via APNs/FCM push independent of any live connection. These are two deliberate paths.
+
+## Development Workflow & Quality Gates
+
+- Work is organized as a Gradle multi-module project (shared protocol, backend, agent) plus the
+  web app and the Compose Multiplatform app. Shared types live in the shared module only.
+- Every change set MUST pass, before merge: build, unit + contract/integration tests, and a
+  Constitution Check confirming no principle is violated (especially fail-safe defaults, scope
+  enforcement, audit emission, and no committed secrets).
+- Secrets are provided via untracked `.env` (see `.env.example`); CI and deployment read them from
+  the secret store. A commit that introduces a plaintext secret MUST be rejected.
+- Cross-component protocol changes MUST update the shared module and bump the protocol version in
+  the same change set.
+- High-impact or destructive capabilities MUST be reviewed against the threat model and covered by
+  audit logging and tests before release.
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+This constitution supersedes ad-hoc practice. All specs, plans, and pull requests MUST verify
+compliance with these principles; unavoidable deviations MUST be documented, justified against the
+threat model, and time-boxed.
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+- **Amendments** require a documented change describing the motivation and impact, an updated Sync
+  Impact Report, and a version bump per the policy below.
+- **Versioning policy (semantic):** MAJOR for backward-incompatible governance/principle removals
+  or redefinitions; MINOR for a new principle/section or materially expanded guidance; PATCH for
+  clarifications and non-semantic refinements.
+- **Compliance review:** the Constitution Check in the plan template is the enforcement point;
+  reviewers MUST block changes that weaken a NON-NEGOTIABLE principle without an approved
+  amendment.
+- Runtime, per-feature guidance lives in each feature's spec/plan under `specs/`; this document
+  holds only durable, project-wide rules.
+
+**Version**: 1.0.0 | **Ratified**: 2026-08-16 | **Last Amended**: 2026-08-16

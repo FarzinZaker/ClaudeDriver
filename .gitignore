@@ -30,3 +30,10 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+
+### Secrets ###
+.env
+.env.local
+*.p8
+*.pem
+*-service-account.json
