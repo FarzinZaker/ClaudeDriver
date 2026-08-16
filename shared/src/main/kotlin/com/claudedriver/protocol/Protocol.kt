@@ -15,7 +15,7 @@ import kotlinx.serialization.json.encodeToJsonElement
  */
 
 /** Current contract version. Bump in the same change set as any wire change. */
-const val PROTOCOL_VERSION: String = "0.3.0"
+const val PROTOCOL_VERSION: String = "0.4.0"
 
 /** Message type discriminators carried in the envelope `type` field. */
 object MessageType {
@@ -38,6 +38,11 @@ object MessageType {
     const val APPROVAL_REQUEST = "approval_request"   // agent → backend (held blocking hook)
     const val APPROVAL_DECISION = "approval_decision" // backend → agent (routed decision)
     const val APPROVAL_EVENT = "approval_event"       // backend → operator (live UI)
+
+    // Phase 3 (remote control) — backend → agent, agent → backend, backend → operator
+    const val CONTROL_COMMAND = "control_command"     // backend → agent (start/dispatch/stop)
+    const val CONTROL_RESULT = "control_result"       // agent → backend (outcome)
+    const val CONTROL_EVENT = "control_event"         // backend → operator (live UI)
 }
 
 /**
@@ -194,6 +199,38 @@ data class ApprovalEvent(
     val at: String,
     val decidedBy: String? = null,
     val reason: String? = null,
+)
+
+// ---- Phase 3 payload types (contracts/protocol-additions.md) ---------------------------------
+
+@kotlinx.serialization.Serializable
+data class ControlCommand(
+    val commandId: String,
+    val type: String, // start_run | dispatch_task | stop_session
+    val claudeSessionId: String? = null,
+    val projectPath: String? = null,
+    val instruction: String? = null,
+    val at: String,
+)
+
+@kotlinx.serialization.Serializable
+data class ControlResult(
+    val commandId: String,
+    val status: String, // started | delivered | done | stopped | undeliverable | error
+    val claudeSessionId: String? = null,
+    val message: String? = null,
+)
+
+@kotlinx.serialization.Serializable
+data class ControlEvent(
+    val commandId: String,
+    val machineId: String,
+    val machineName: String,
+    val commandType: String,
+    val status: String,
+    val claudeSessionId: String? = null,
+    val at: String,
+    val message: String? = null,
 )
 
 /** Encode/decode helpers so no consumer re-implements the framing. */

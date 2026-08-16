@@ -4,6 +4,7 @@ import com.claudedriver.backend.ws.OperatorHub
 import com.claudedriver.protocol.AlertEvent
 import com.claudedriver.protocol.ApprovalEvent
 import com.claudedriver.protocol.Codec
+import com.claudedriver.protocol.ControlEvent
 import com.claudedriver.protocol.MessageType
 import com.claudedriver.protocol.SessionUpdate
 import java.util.concurrent.atomic.AtomicLong
@@ -22,5 +23,9 @@ class Publisher(private val hub: OperatorHub) {
 
     suspend fun approvalEvent(event: ApprovalEvent) {
         hub.broadcast(Codec.encode(Codec.envelope(MessageType.APPROVAL_EVENT, seq.incrementAndGet(), event)))
+    }
+
+    suspend fun controlEvent(event: ControlEvent) {
+        hub.broadcast(Codec.encode(Codec.envelope(MessageType.CONTROL_EVENT, seq.incrementAndGet(), event)))
     }
 }

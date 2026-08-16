@@ -3,6 +3,7 @@ package com.claudedriver.agent
 import com.claudedriver.protocol.ApprovalDecision
 import com.claudedriver.protocol.ApprovalRequest
 import com.claudedriver.protocol.Codec
+import com.claudedriver.protocol.ControlCommand
 import com.claudedriver.protocol.Envelope
 import com.claudedriver.protocol.Hello
 import com.claudedriver.protocol.HelloAck
@@ -57,10 +58,12 @@ private data class OutFrame(val type: String, val payload: JsonElement)
 class AgentClient(
     private val serverBaseUrl: String,
     private val storageDir: File,
-    private val agentVersion: String = "0.2.0",
+    private val agentVersion: String = "0.4.0",
     private val hookReceiverPort: Int = 8765,
     private val settingsFile: File = HookInstaller.defaultSettingsFile(),
+    private val launcher: Launcher = ShellSessionLauncher(),
 ) {
+    private var sessionController: SessionController? = null
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val http = HttpClient(CIO) { install(WebSockets) }
     private val hookTokenEnvVar = "CLAUDEDRIVER_HOOK_TOKEN"
@@ -136,6 +139,12 @@ class AgentClient(
             ProcessMonitor().run { snapshot -> emit(MessageType.PROCESS_SNAPSHOT, snapshot) }
         }
 
+        sessionController = SessionController(
+            launcher = launcher,
+            emitActivity = { activity -> emit(MessageType.ACTIVITY_EVENT, activity) },
+            emitResult = { result -> emit(MessageType.CONTROL_RESULT, result) },
+        )
+
         var attempt = 0
         while (true) {
             try {
@@ -182,6 +191,11 @@ class AgentClient(
                         MessageType.APPROVAL_DECISION -> {
                             val decision = Codec.decodePayload<ApprovalDecision>(env)
                             pendingApprovals[decision.requestId]?.complete(decision.decision)
+                        }
+
+                        MessageType.CONTROL_COMMAND -> {
+                            val command = Codec.decodePayload<ControlCommand>(env)
+                            launch { sessionController?.handle(command) }
                         }
                     }
                 }

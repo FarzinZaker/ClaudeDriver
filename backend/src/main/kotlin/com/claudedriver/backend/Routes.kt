@@ -10,10 +10,14 @@ import com.claudedriver.backend.api.RegisterOptionsRequest
 import com.claudedriver.backend.api.WhoAmIResponse
 import com.claudedriver.backend.api.AlertsResponse
 import com.claudedriver.backend.api.ApprovalsResponse
+import com.claudedriver.backend.api.CommandAcceptedResponse
+import com.claudedriver.backend.api.CommandsResponse
 import com.claudedriver.backend.api.DecideRequest
 import com.claudedriver.backend.api.DecideResponse
 import com.claudedriver.backend.api.DeviceRegisterRequest
+import com.claudedriver.backend.api.DispatchRequest
 import com.claudedriver.backend.api.SessionsResponse
+import com.claudedriver.backend.api.StartRunRequest
 import com.claudedriver.backend.api.toDto
 import com.claudedriver.backend.approvals.DecideOutcome
 import com.claudedriver.backend.audit.AuditAction
@@ -24,6 +28,7 @@ import com.claudedriver.backend.ws.OutFrame
 import com.claudedriver.protocol.ActivityEvent
 import com.claudedriver.protocol.ApprovalRequest
 import com.claudedriver.protocol.Codec
+import com.claudedriver.protocol.ControlResult
 import com.claudedriver.protocol.Envelope
 import com.claudedriver.protocol.HelloAck
 import com.claudedriver.protocol.MessageType
@@ -225,6 +230,54 @@ fun Application.configureRouting(deps: AppDeps) = routing {
         }
     }
 
+    // ---- Operator: remote control (dispatch / start-run / stop) ----
+    post("/sessions/{id}/dispatch") {
+        val op = requireOperator(deps) ?: return@post
+        val instruction = call.receive<DispatchRequest>().instruction
+        val target = deps.control.sessionTarget(UUID.fromString(call.parameters["id"]))
+            ?: return@post call.respond(HttpStatusCode.NotFound, ErrorResponse("not_found", "No such session"))
+        if (!deps.control.isConnected(target.machineId)) {
+            return@post call.respond(HttpStatusCode.Conflict, ErrorResponse("offline", "Machine is offline"))
+        }
+        val commandId = deps.control.issue(
+            type = "dispatch_task", machineId = target.machineId,
+            sessionId = UUID.fromString(call.parameters["id"]), claudeSessionId = target.claudeSessionId,
+            instruction = instruction, operator = op.handle,
+        )
+        call.respond(HttpStatusCode.Accepted, CommandAcceptedResponse(commandId.toString(), "pending"))
+    }
+
+    post("/machines/{id}/start-run") {
+        val op = requireOperator(deps) ?: return@post
+        val req = call.receive<StartRunRequest>()
+        val machineId = UUID.fromString(call.parameters["id"])
+        if (!deps.control.isConnected(machineId)) {
+            return@post call.respond(HttpStatusCode.Conflict, ErrorResponse("offline", "Machine is offline"))
+        }
+        val commandId = deps.control.issue(
+            type = "start_run", machineId = machineId,
+            projectPath = req.projectPath, instruction = req.instruction, operator = op.handle,
+        )
+        call.respond(HttpStatusCode.Accepted, CommandAcceptedResponse(commandId.toString(), "pending"))
+    }
+
+    post("/sessions/{id}/stop") {
+        val op = requireOperator(deps) ?: return@post
+        val target = deps.control.sessionTarget(UUID.fromString(call.parameters["id"]))
+            ?: return@post call.respond(HttpStatusCode.NotFound, ErrorResponse("not_found", "No such session"))
+        val commandId = deps.control.issue(
+            type = "stop_session", machineId = target.machineId,
+            sessionId = UUID.fromString(call.parameters["id"]), claudeSessionId = target.claudeSessionId,
+            operator = op.handle,
+        )
+        call.respond(HttpStatusCode.Accepted, CommandAcceptedResponse(commandId.toString(), "pending"))
+    }
+
+    get("/commands") {
+        requireOperator(deps) ?: return@get
+        call.respond(CommandsResponse(deps.control.list().map { it.toDto() }))
+    }
+
     // ---- Operator: push devices ----
     post("/devices") {
         val op = requireOperator(deps) ?: return@post
@@ -368,6 +421,12 @@ private suspend fun DefaultWebSocketServerSession.handleAgentConnect(deps: AppDe
                 MessageType.APPROVAL_REQUEST -> {
                     val request = runCatching { Codec.decodePayload<ApprovalRequest>(env) }.getOrNull() ?: continue
                     deps.approvals.raise(identity.machineId, request)
+                    deps.trust.updateLastSeq(connectionId, env.seq)
+                }
+
+                MessageType.CONTROL_RESULT -> {
+                    val result = runCatching { Codec.decodePayload<ControlResult>(env) }.getOrNull() ?: continue
+                    deps.control.applyResult(identity.machineId, result)
                     deps.trust.updateLastSeq(connectionId, env.seq)
                 }
             }

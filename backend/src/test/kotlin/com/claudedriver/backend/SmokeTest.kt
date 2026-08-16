@@ -63,11 +63,20 @@ class SmokeTest {
             // 2) Real agent: enroll over HTTP, then connect over WSS (receiver + hooks → temp).
             val agentDir = Files.createTempDirectory("smoke-agent").toFile()
             val receiverPort = 18799
+            // A fake launcher: a stdin-reading process that records delivered lines to a file, so we
+            // can prove start-run → dispatch → stop over the real control channel.
+            val dispatchLog = File(agentDir, "dispatch.log")
+            val fakeLauncher = object : com.claudedriver.agent.Launcher {
+                override fun launch(claudeSessionId: String, projectPath: String?, instruction: String?): Process =
+                    ProcessBuilder("/bin/sh", "-c", "while IFS= read -r line; do printf '%s\\n' \"\$line\" >> '${dispatchLog.absolutePath}'; done")
+                        .redirectErrorStream(true).start()
+            }
             val agent = AgentClient(
                 serverBaseUrl = "http://127.0.0.1:${config.port}",
                 storageDir = agentDir,
                 hookReceiverPort = receiverPort,
                 settingsFile = File(agentDir, "claude-settings.json"),
+                launcher = fakeLauncher,
             )
             agent.enroll(machineId.toString(), approved.code)
             println("• agent enrolled (received device certificate)")
@@ -127,7 +136,24 @@ class SmokeTest {
             check(denyResp.contains("\"permissionDecision\":\"deny\"")) { "deny should deny: $denyResp" }
             println("• blocking approval DENIED → deny ✅")
 
-            println("\nSMOKE PASS — monitoring + alerts + remote approve/deny verified over real HTTP/WSS + Postgres.")
+            // 8) Remote control — start a persistent run, dispatch a task, then stop. All over the
+            //    real control channel; the fake launcher records the dispatched instruction.
+            val startId = deps.control.issue("start_run", machineId, projectPath = "/tmp", instruction = "boot", operator = "smoke-op")
+            waitUntil(15_000) { deps.control.list().any { it.id == startId && it.status == "started" } }
+            val started = deps.control.list().first { it.id == startId }
+            val managedSessionId = started.claudeSessionId!!
+            println("• started persistent run ✅ session=$managedSessionId")
+
+            val dispatchId = deps.control.issue("dispatch_task", machineId, claudeSessionId = managedSessionId, instruction = "do-the-work", operator = "smoke-op")
+            waitUntil(15_000) { deps.control.list().any { it.id == dispatchId && it.status == "delivered" } }
+            waitUntil(15_000) { dispatchLog.exists() && dispatchLog.readText().contains("do-the-work") }
+            println("• dispatched task DELIVERED (managed process recorded it) ✅")
+
+            val stopId = deps.control.issue("stop_session", machineId, claudeSessionId = managedSessionId, operator = "smoke-op")
+            waitUntil(15_000) { deps.control.list().any { it.id == stopId && it.status == "stopped" } }
+            println("• stopped the session ✅")
+
+            println("\nSMOKE PASS — monitoring + alerts + approve/deny + start/dispatch/stop verified over real HTTP/WSS + Postgres.")
             agentJob.cancel()
         } finally {
             http.close()

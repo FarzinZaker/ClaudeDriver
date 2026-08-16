@@ -8,6 +8,7 @@ import com.claudedriver.backend.ca.DeviceCa
 import com.claudedriver.backend.config.Config
 import com.claudedriver.backend.connection.TrustService
 import com.claudedriver.backend.approvals.ApprovalService
+import com.claudedriver.backend.control.ControlService
 import com.claudedriver.backend.enrollment.EnrollmentService
 import com.claudedriver.backend.monitoring.AlertService
 import com.claudedriver.backend.monitoring.AttentionClassifier
@@ -57,6 +58,7 @@ class AppDeps(
     val agentHub: AgentHub,
     val approvals: ApprovalService,
     val devices: DeviceStore,
+    val control: ControlService,
 ) {
     companion object {
         fun create(config: Config, database: Database): AppDeps {
@@ -75,6 +77,7 @@ class AppDeps(
             // Dev uses a logging push sender; prod swaps in SnsPushSender at deploy.
             val push = PushService(devices, LoggingPushSender())
             val approvals = ApprovalService(database, audit, publisher, agentHub, push)
+            val control = ControlService(database, audit, publisher, agentHub, approvals)
             return AppDeps(
                 config = config,
                 database = database,
@@ -91,6 +94,7 @@ class AppDeps(
                 agentHub = agentHub,
                 approvals = approvals,
                 devices = devices,
+                control = control,
             )
         }
     }
