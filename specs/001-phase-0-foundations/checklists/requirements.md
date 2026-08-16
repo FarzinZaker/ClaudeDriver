@@ -31,13 +31,16 @@
 
 ## Notes
 
-- Validation passed on first iteration (all items).
-- Requirements (FR-001..FR-020) are written technology-agnostically (device identity, outbound
-  connection, external secret store, shared contract) rather than naming mechanisms; specific
-  technology (mTLS, Ktor, Azure, WebSocket) is deferred to `/speckit.plan`.
-- The hosting provider (Azure) and cloud-provider identity are named only in the **Assumptions**
-  section as inherited context from the ratified constitution, not as functional requirements. If a
-  self-contained operator sign-in (e.g. passkey) is preferred over cloud-provider identity, resolve
-  it in `/speckit.clarify` before planning.
-- Items marked incomplete would require spec updates before `/speckit.clarify` or `/speckit.plan`;
-  none are incomplete.
+- Validation re-run 2026-08-16 after `/speckit.clarify`: all items still pass (16/16); no checkbox
+  state changed.
+- Requirements (FR-001..FR-022) are written technology-agnostically (device identity, outbound
+  connection, external secret store, shared contract, cost attribution) rather than naming build
+  mechanisms; specific technology (Ktor, RDS, WebSocket) is deferred to `/speckit.plan`.
+- A few concrete choices ARE named because they were explicit operator decisions from clarification,
+  not free implementation choices: self-hosted **passkeys / WebAuthn** for operator sign-in (FR-006),
+  and **infrastructure-as-code** to enforce cost tagging (FR-022). The hosting provider (**AWS**) is
+  named only in Assumptions/Dependencies as context, not as a functional requirement.
+- Clarifications integrated: operator auth method (passkeys, self-hosted), Phase 0 enrollment depth
+  (working minimal), fleet scale (≤10 machines / ≤25 sessions), and Phase 0 operator client (minimal
+  web status page).
+- Items marked incomplete would require spec updates before `/speckit.plan`; none are incomplete.

@@ -8,10 +8,12 @@ core value, **P2** = later/optional.
 
 | Decision | Choice |
 |---|---|
-| Remote reach | Fully remote / off-network — backend hosted on **Azure**, internet-reachable, hardened |
+| Remote reach | Fully remote / off-network — backend hosted on **AWS**, internet-reachable, hardened |
 | Per-machine model | **Installed agent** (Kotlin/JVM daemon) on each Win/Mac machine |
 | Users / risk | **Single operator**, treated as **high-risk** (RCE control plane) |
-| Hosting | **Azure**, cost-conscious (minimal SKUs, scale-to-idle); secrets via `.env` / Key Vault |
+| Operator auth | **Self-hosted passkeys / WebAuthn** — no external identity provider |
+| Hosting | **AWS**, cost-conscious (minimal compute, scale-to-idle); secrets via `.env` / AWS Secrets Manager |
+| Billing | All AWS resources grouped + tagged under one project id (`Project=ClaudeDriver`) with a budget, so cost is clear |
 
 ## The integration reality (shapes scope)
 
@@ -29,18 +31,22 @@ core value, **P2** = later/optional.
 
 ## Phase 0 — Foundations & Contracts  **(P0)**
 
-Goal: a skeleton that compiles, deploys cheaply to Azure, and pins the shared contract + security model.
+Goal: a skeleton that compiles, deploys cheaply to AWS, and pins the shared contract + security model.
 
 - **M0.1 Monorepo & build** — Gradle multi-module: `shared` (protocol), `backend` (Ktor), `agent`
   (JVM daemon); separate `web` (Vite/React) and `mobile` (Compose Multiplatform). Wire the shared
   module into backend + agent + mobile.
 - **M0.2 Shared protocol module** — `kotlinx.serialization` DTOs + versioned envelope for all
   agent↔backend↔client messages. Single source of truth (Principle III).
-- **M0.3 Azure infra baseline** — Container Apps (backend, scale-to-idle), Azure DB for PostgreSQL
-  Flexible (smallest tier), Key Vault, Azure Notification Hubs (unified FCM/APNs). Flyway baseline
-  migration. `.env` wired to Key Vault.
-- **M0.4 Security architecture spike** — mTLS device-enrollment design, operator AuthN (Entra ID /
-  OIDC or passkey), scope model. **Blocks everything that follows** (Principle I).
+- **M0.3 AWS infra baseline** — backend compute (App Runner or ECS Fargate, scale-to-idle), Amazon
+  RDS for PostgreSQL / Aurora Serverless v2 (smallest tier), AWS Secrets Manager / SSM Parameter
+  Store, Amazon SNS / Pinpoint for push. Flyway baseline migration. `.env` wired to Secrets Manager.
+  **Cost grouping:** every resource tagged `Project=ClaudeDriver` (+ `Environment`), collected via an
+  AWS Resource Group and an activated cost-allocation tag, with an AWS Budget/alert (Principle VII).
+  Infra-as-code (e.g. Terraform/CDK) so the tag policy is enforced, not manual.
+- **M0.4 Security & enrollment (working minimal)** — mTLS device enrollment (operator-approved →
+  device cert), self-hosted passkey/WebAuthn operator sign-in, scope model. A *working* walking
+  skeleton, not just a design doc. **Blocks everything that follows** (Principle I).
 - **M0.5 CI** — build + test + secret-scan gate; Constitution Check checklist.
 
 ## Phase 1 — Monitoring MVP  **(P0)**  — *"See everything"*
@@ -63,7 +69,7 @@ Goal: watch all Claude Code instances across machines and show them live. No con
 Goal: be alerted anywhere and approve/deny tool permissions remotely — safely.
 
 - **M2.1 Alert pipeline** — Notification events → alert model, unread/ack, severity, dedupe.
-- **M2.2 Mobile app + push** — Compose Multiplatform shell, FCM+APNs via Notification Hubs,
+- **M2.2 Mobile app + push** — Compose Multiplatform shell, FCM+APNs via Amazon SNS / Pinpoint,
   device-token registration, tap-through to the alert. Remote-by-default (no LAN dependency).
 - **M2.3 Blocking approval flow** — `PreToolUse` blocking hook → backend holds the decision until
   the operator answers on web/mobile; **timeout ⇒ deny** (Principle I fail-safe). Idempotent.
@@ -99,14 +105,13 @@ Goal: close the "answer any question remotely" gap and harden for the risk profi
 ## Recommended starting order
 
 1. **M0.4 security spike** and **M0.2 shared protocol** first — they constrain everything.
-2. Stand up **M0.1/M0.3** skeleton + Azure.
+2. Stand up **M0.1/M0.3** skeleton + AWS.
 3. Build **Phase 1** end-to-end for one machine, then fan out to many.
 4. Layer **Phase 2** (alerts + approvals) — this is where the product becomes genuinely useful.
 5. **Phase 3 → 4** as the value and risk tolerance grow.
 
 ## Open questions to resolve during `/speckit.specify`
 
-- Operator AuthN: Entra ID (fits Azure) vs. self-contained passkey? (Leaning Entra ID.)
 - Which Claude Code events to treat as "needs attention" vs. "informational" for alert noise.
 - Task dispatch to idle sessions: channels vs. `--resume` — pick per reliability.
 - Phase 4: is SDK-managed mode worth the added footprint, or is approve+dispatch enough?

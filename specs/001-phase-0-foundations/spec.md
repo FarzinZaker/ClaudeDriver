@@ -6,7 +6,7 @@
 
 **Status**: Draft
 
-**Input**: User description: "Phase 0 Foundations and Contracts: monorepo, shared protocol, Azure infra baseline, security/enrollment architecture spike, and CI for ClaudeDriver"
+**Input**: User description: "Phase 0 Foundations and Contracts: monorepo, shared protocol, AWS infra baseline, security/enrollment architecture spike, and CI for ClaudeDriver" (hosting retargeted to AWS during clarification)
 
 ## Overview
 
@@ -17,6 +17,20 @@ quality gate that keeps the system honest. It intentionally delivers **no produc
 (no process monitoring, no alerts, no approvals) — its value is a secure, deployable spine that
 proves the riskiest foundations (trust, deployment, contract, secrets) end-to-end before feature
 work begins.
+
+## Clarifications
+
+### Session 2026-08-16
+
+- Q: How should the operator sign in? → A: Self-hosted passkeys / WebAuthn, with no external identity
+  provider. (Related decision: hosting is **AWS**, and all AWS resources must be grouped/tagged so
+  project billing is clear.)
+- Q: How complete should machine enrollment be in Phase 0? → A: Working minimal enrollment — a real
+  walking skeleton that genuinely rejects unenrolled/forged agents (not a design-only spike).
+- Q: What fleet size should the foundations be designed and cost-sized for? → A: Small — up to 10
+  machines and up to 25 concurrent sessions.
+- Q: What acts as the operator client in Phase 0 to prove the end-to-end message? → A: A minimal web
+  status page that renders live status and the sample message.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -155,7 +169,9 @@ confirm it passes.
 - **FR-005**: The system MUST expose an operator-facing status surface reporting current system and
   connection state.
 - **FR-006**: The system MUST require operator authentication for every non-public surface and MUST
-  refuse unauthenticated or improperly-authenticated access.
+  refuse unauthenticated or improperly-authenticated access. Operator authentication MUST be
+  self-hosted, phishing-resistant (passkeys / WebAuthn), and MUST NOT depend on an external identity
+  provider.
 - **FR-007**: The system MUST record authentication failures and refused access attempts.
 
 **Machine enrollment & identity**
@@ -178,8 +194,8 @@ confirm it passes.
   shared type.
 - **FR-015**: The contract MUST carry an explicit version; components MUST negotiate compatibility at
   connection time and refuse incompatible peers with a clear reason.
-- **FR-016**: The system MUST demonstrate a sample message traveling agent → backend → operator
-  client and being interpreted identically by each.
+- **FR-016**: The system MUST demonstrate a sample message traveling agent → backend → a minimal web
+  status page (the Phase 0 operator client) and being interpreted identically by each.
 
 **Resilience & auditability (foundational)**
 - **FR-017**: The agent MUST reconnect automatically using backoff after a lost or refused-then-fixed
@@ -192,6 +208,13 @@ confirm it passes.
   can merge, and MUST be blocked on any failure.
 - **FR-020**: The quality gate MUST fail a change that introduces a plaintext secret or breaks the
   shared contract or a test.
+
+**Hosting & cost attribution**
+- **FR-021**: Every hosted resource provisioned for the system MUST be grouped and tagged under a
+  single project identifier so that total project cost is clearly and separately attributable, with a
+  budget/cost alert configured.
+- **FR-022**: Provisioning MUST be reproducible (infrastructure-as-code) so the grouping/tagging is
+  enforced automatically rather than applied by hand.
 
 ### Key Entities
 
@@ -231,19 +254,26 @@ confirm it passes.
   break the contract, or break a test, and passes compliant changes.
 - **SC-008**: After an induced backend outage, a running agent reconnects automatically within a
   bounded time once the backend returns, without manual intervention.
+- **SC-009**: The foundations sustain the target small fleet (up to 10 machines / 25 concurrent
+  sessions) within the stated minimal cost envelope, and the project's total hosting cost is
+  reportable as a single, separately-attributable figure.
 
 ## Assumptions
 
 - **Single operator, high-risk posture**: exactly one authorized operator in this phase, treated as
   a fleet administrator; multi-user roles are deferred to a later phase.
-- **Hosting**: the backend is hosted on the operator's cloud environment (Azure) and is
-  internet-reachable; it is therefore hardened to stand safe on the public internet (strong operator
-  auth + mutually-authenticated agents), and no separate VPN/tunnel is assumed for reachability.
-- **Operator authentication method**: cloud-provider identity (e.g. the hosting provider's directory)
-  is assumed as the default operator sign-in; this may be revisited in `/speckit.clarify` if a
-  self-contained method (e.g. passkey) is preferred.
-- **Cost-consciousness**: infrastructure uses minimal, scale-to-idle resources; any always-on cost is
-  justified in the plan (Constitution Principle VII).
+- **Hosting**: the backend and all services are hosted on **AWS** and are internet-reachable; the
+  system is therefore hardened to stand safe on the public internet (strong operator auth +
+  mutually-authenticated agents), and no separate VPN/tunnel is assumed for reachability.
+- **Operator authentication method** (resolved): self-hosted passkeys / WebAuthn, with no external
+  identity provider.
+- **Fleet scale**: the foundations are designed and cost-sized for a small fleet — up to 10 machines
+  and up to 25 concurrent sessions — and may grow later.
+- **Operator client for Phase 0**: a minimal web status page serves as the operator client that
+  renders live status and the demonstrated sample message; the full web dashboard is a later phase.
+- **Cost-consciousness & attribution**: infrastructure uses minimal, scale-to-idle resources; any
+  always-on cost is justified in the plan; and all resources are grouped/tagged under one project
+  identifier with a budget so project billing is clear (Constitution Principle VII).
 - **Machines have outbound internet access**; no inbound reachability to developer machines is assumed
   or required.
 - **Enrollment scope for Phase 0**: a minimal but *working* operator-approved enrollment and
@@ -258,7 +288,7 @@ confirm it passes.
 
 ## Dependencies
 
-- Availability of the operator's cloud hosting account and an external secret store.
+- Availability of the operator's AWS account and an AWS-managed secret store (Secrets Manager / SSM).
 - Ability to run a small long-lived background process on each developer machine (installed later;
   Phase 0 only requires it can connect outbound).
 - The ratified project constitution (`.specify/memory/constitution.md`), whose Principles I–VII this

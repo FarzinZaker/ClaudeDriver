@@ -1,22 +1,28 @@
 <!--
 SYNC IMPACT REPORT
-Version change: (none) → 1.0.0
-Rationale: Initial ratification of the ClaudeDriver constitution.
-Modified principles: n/a (initial adoption)
-Added sections:
-  - Core Principles (7): Security-First & Fail-Safe; Spec-Driven & Test-Backed;
-    Single Shared Contract; Outbound-Only Agents & Explicit Enrollment;
-    Resilient Real-Time Delivery; Full Auditability & Observability;
-    Resource & Cost Discipline
-  - Technology & Architecture Constraints
-  - Development Workflow & Quality Gates
-  - Governance
+Version change: 1.0.0 → 1.1.0
+Rationale: Amendment — set hosting provider to AWS, specify self-hosted
+  (passkey/WebAuthn) operator authentication with no external identity
+  provider, and require project-level cost attribution (resource
+  grouping/tagging). MINOR: materially updated Technology & Architecture
+  Constraints and clarified Principle I & VII; no principle removed.
+Modified principles:
+  - I. Security-First & Fail-Safe — operator AuthN specified as self-hosted
+    passkeys/WebAuthn (was "OIDC/SSO or passkey/TOTP")
+  - VII. Resource & Cost Discipline — added project cost-attribution requirement
+Modified sections:
+  - Technology & Architecture Constraints — Azure → AWS across backend,
+    persistence, secrets, push, and remote access
+Added sections: none
 Removed sections: none
 Templates reviewed:
   - .specify/templates/plan-template.md ✅ (Constitution Check gate references these principles)
   - .specify/templates/spec-template.md ✅
   - .specify/templates/tasks-template.md ✅
 Deferred TODOs: none
+
+Prior versions:
+  - 1.0.0 (2026-08-16): Initial ratification (7 principles + constraints + workflow + governance).
 -->
 
 # ClaudeDriver Constitution
@@ -37,7 +43,8 @@ crown-jewel asset with minimized blast radius.
 
 - Agents MUST authenticate to the backend with per-device identity (mTLS client certificates
   issued at enrollment). Bearer tokens alone MUST NOT be the sole agent credential.
-- Operators MUST authenticate with strong AuthN (OIDC/SSO or passkey/TOTP). Answering prompts or
+- Operators MUST authenticate with strong, phishing-resistant, self-hosted authentication
+  (passkeys / WebAuthn) that does NOT depend on an external identity provider. Answering prompts or
   dispatching tasks is a fleet-admin capability and MUST be gated accordingly.
 - Authorization MUST be least-privilege and scoped per operator × machine × project × action.
 - **Fail-safe, never fail-open:** when a decision path is unreachable, times out, or is ambiguous,
@@ -124,10 +131,12 @@ Rationale: an RCE tool without a complete audit trail is unaccountable and undia
 
 The hosted footprint MUST stay small and predictable.
 
-- Components MUST be efficient at rest — thousands of mostly-idle connections MUST NOT translate
-  into proportional CPU/memory or cost.
-- Cloud resources MUST prefer minimal SKUs and scale-to-idle where available; any resource that
-  incurs ongoing cost MUST be justified in the plan.
+- Components MUST be efficient at rest — many mostly-idle connections MUST NOT translate into
+  proportional CPU/memory or cost.
+- Cloud resources MUST prefer minimal instance sizes and scale-to-idle where available; any resource
+  that incurs ongoing cost MUST be justified in the plan.
+- All hosted resources MUST be grouped and tagged under a single project identifier so total project
+  cost is clearly attributable (cost-allocation tags + a budget/alert), keeping billing legible.
 - Per-connection memory, polling intervals, and event volume MUST be bounded and reviewed.
 
 Rationale: the operator explicitly constrains hosting cost; efficiency is a first-class design
@@ -136,7 +145,8 @@ requirement, not an afterthought.
 ## Technology & Architecture Constraints
 
 - **Backend:** Kotlin on the JVM using Ktor (coroutine-native, WebSocket-first). Persistence in
-  PostgreSQL with Flyway migrations. Hosted on Azure with minimal, scale-aware SKUs.
+  PostgreSQL (Amazon RDS / Aurora Serverless) with Flyway migrations. Hosted on AWS with minimal,
+  scale-aware compute; secrets in AWS Secrets Manager / SSM Parameter Store.
 - **Per-machine agent:** a Kotlin/JVM daemon installed as a Windows Service / macOS launchd
   service, using OSHI for cross-platform process detection (name, args, working directory,
   lifecycle). Ships the same shared protocol module as the backend.
@@ -153,8 +163,9 @@ requirement, not an afterthought.
   hook-based mode and, if ever required, MUST be delivered via an Agent-SDK-managed session mode
   specified separately.
 - **Remote access & push:** the operator is typically off-network. Interactive access reaches the
-  Azure-hosted backend directly (hardened, never left unauthenticated); background alerts reach the
-  operator via APNs/FCM push independent of any live connection. These are two deliberate paths.
+  AWS-hosted backend directly (hardened, never left unauthenticated); background alerts reach the
+  operator via APNs/FCM push (dispatched via Amazon SNS / Pinpoint) independent of any live
+  connection. These are two deliberate paths.
 
 ## Development Workflow & Quality Gates
 
@@ -187,4 +198,4 @@ threat model, and time-boxed.
 - Runtime, per-feature guidance lives in each feature's spec/plan under `specs/`; this document
   holds only durable, project-wide rules.
 
-**Version**: 1.0.0 | **Ratified**: 2026-08-16 | **Last Amended**: 2026-08-16
+**Version**: 1.1.0 | **Ratified**: 2026-08-16 | **Last Amended**: 2026-08-16
