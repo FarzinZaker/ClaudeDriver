@@ -26,8 +26,18 @@ tasks (Phase 3).
 
 ### Session 2026-08-16
 
-_None yet. Two assumptions worth confirming in `/speckit.clarify` before planning: the approval
-**timeout** (defaulted to deny after a bounded wait) and **which tool prompts** require approval._
+- Q: How long to wait before defaulting to deny? → A: **No ClaudeDriver-imposed timeout** — an
+  approval request stays pending until the operator approves or denies; the system never auto-decides
+  it. **Reconciliation (platform + safety):** Claude Code's blocking hook cannot pause an instance
+  literally forever, so the hook is held open with a very long timeout; if Claude Code's own hard
+  hook limit is ever reached, or the decision path fails, the outcome is **DENY** — never
+  auto-approve (Constitution Principle I is non-negotiable and supersedes).
+- Q: Which tool prompts require approval? → A: **Whatever Claude Code would normally prompt on** —
+  respect its own permission rules; do not invent prompts for actions it would auto-allow.
+- Q: Mobile sign-in? → A: **Passkey** — the same self-hosted WebAuthn as the web (no new mechanism).
+- Q: Build authorization scope now? → A: **No** — single operator with full access for now;
+  per-machine/project scoping is deferred to when multi-user arrives. Audit, at-most-once, and
+  fail-safe are still built now.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -53,10 +63,12 @@ and does not run the tool.
    the tool and the item resolves as approved.
 3. **Given** a pending approval, **When** the operator denies, **Then** the instance does not run the
    tool and the item resolves as denied.
-4. **Given** a pending approval, **When** the operator has not decided within the allowed time,
-   **Then** the system **denies** by default and the item resolves as timed-out-denied (fail-safe).
-5. **Given** the decision path is unreachable at decision time, **When** the wait elapses, **Then**
-   the outcome is deny — never an accidental approve.
+4. **Given** a pending approval, **When** the operator has not decided yet, **Then** the request
+   stays pending and the instance stays paused — the system does not auto-decide it (no
+   ClaudeDriver-imposed timeout).
+5. **Given** the decision path fails, or the platform's own hard limit on pausing an instance is
+   reached before a decision, **When** that happens, **Then** the outcome is **deny** — never an
+   accidental approve.
 
 ---
 
@@ -134,8 +146,9 @@ timeout/disconnect and confirm the outcome is deny.
 
 ### Edge Cases
 
-- **Decision arrives after timeout-deny** → ignored; the final (denied) outcome stands, and the
-  operator is told it already timed out.
+- **Decision arrives after a forced deny** (platform hard-limit or path failure already resolved it
+  to deny) → the late decision is ignored; the final (denied) outcome stands and the operator is told
+  it was already resolved.
 - **Instance crashes/stops while waiting** → the approval resolves as moot; a late approve cannot
   run anything.
 - **Duplicate approval requests** for the same waiting prompt → coalesced into one pending item.
@@ -143,25 +156,29 @@ timeout/disconnect and confirm the outcome is deny.
   failure never blocks the approval (the web path remains).
 - **Operator decides on two surfaces at once** (web + phone) → the first decision wins; the second is
   a no-op with a clear "already decided" indication.
-- **Backend↔agent link drops mid-wait** → on the machine the prompt still ultimately resolves to deny
-  by timeout (the instance is never left blocked forever, and never auto-approved).
-- **Clock differences** → timeout is enforced conservatively so a decision is never accepted after the
-  deny deadline.
+- **Backend↔agent link drops mid-wait** → on the machine the prompt ultimately resolves to **deny**
+  (the instance is never left blocked forever, and never auto-approved).
+- **Platform pause limit reached** → if Claude Code's own maximum pause duration is hit before a
+  decision, that specific request resolves to **deny** (fail-safe); the operator is notified it could
+  not be held longer.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
 **Remote approval flow**
-- **FR-001**: When a monitored Claude Code instance requests permission to use a tool, the system
-  MUST surface a pending **approval request** with the machine, project, session, and a clear
-  description of the specific action requested, and mark the session as waiting on it.
-- **FR-002**: The instance MUST pause on the request until a decision is delivered or the timeout
-  elapses; the operator's **approve** MUST let it proceed and **deny** MUST prevent the tool from
-  running.
-- **FR-003**: If no decision is made within a bounded, configurable time, the system MUST resolve the
-  request as **denied** (fail-safe). The system MUST NEVER auto-approve by timeout, error, or
-  component failure.
+- **FR-001**: When a monitored Claude Code instance requests permission to use a tool — for the
+  actions Claude Code itself would prompt on (respecting its own permission rules; not inventing
+  prompts for actions it would auto-allow) — the system MUST surface a pending **approval request**
+  with the machine, project, session, and a clear description of the specific action requested, and
+  mark the session as waiting on it.
+- **FR-002**: The instance MUST pause on the request until a decision is delivered; the operator's
+  **approve** MUST let it proceed and **deny** MUST prevent the tool from running.
+- **FR-003**: The system MUST NOT impose its own decision timeout — an approval request remains
+  pending until the operator explicitly approves or denies. The system MUST NEVER auto-approve. If
+  the underlying platform's own hard limit on how long an instance can pause is reached, or the
+  decision path fails, the ONLY permissible non-approve outcome is **DENY** (fail-safe, Constitution
+  Principle I).
 - **FR-004**: A decision MUST take effect on the correct waiting instance and MUST be applied **at
   most once**; late or duplicate decisions MUST NOT change an already-final outcome.
 - **FR-005**: If the waiting instance disappears before a decision, the request MUST resolve as
@@ -169,7 +186,8 @@ timeout/disconnect and confirm the outcome is deny.
 
 **Mobile app & push**
 - **FR-006**: The system MUST provide a mobile app for iOS and Android through which the operator
-  signs in, views alerts/approvals, and approves/denies.
+  signs in **with a passkey (the same self-hosted WebAuthn as the web)**, views alerts/approvals, and
+  approves/denies.
 - **FR-007**: The system MUST deliver a **push notification** to the operator's registered devices
   when an attention alert or approval request is raised, reaching the phone even when the app is
   backgrounded and off the machine's local network.
@@ -189,8 +207,10 @@ timeout/disconnect and confirm the outcome is deny.
 **Safety, scope & audit**
 - **FR-013**: Every approval decision MUST be recorded to the append-only audit trail with operator,
   machine, session, requested action, decision, and timestamp.
-- **FR-014**: Decisions MUST be authorized against the operator's permitted machines/projects
-  (scope); unauthorized decisions MUST be refused and recorded.
+- **FR-014**: For the current single operator, all machines/projects are in scope (no per-scope
+  restriction is built yet). The decision channel MUST still be authenticated (FR-015) and every
+  decision audited (FR-013). Per-operator machine/project scoping is deferred to multi-user (a later
+  phase); the design MUST NOT preclude adding it.
 - **FR-015**: The identity/channel carrying a decision to the instance MUST be authenticated
   (reusing the Phase 0 device-identity + authenticated agent channel); an unauthenticated or
   unenrolled path MUST NOT be able to answer a prompt.
@@ -214,14 +234,16 @@ timeout/disconnect and confirm the outcome is deny.
   (web and mobile) within 5 seconds, with the specific action shown.
 - **SC-002**: An approve/deny decision reaches and takes effect on the waiting instance within 5
   seconds of the operator's action.
-- **SC-003**: 100% of undecided requests resolve as **denied** at the timeout — 0% ever auto-approve
-  by timeout, error, disconnect, or crash.
+- **SC-003**: The system never auto-approves — **0%** of requests are ever approved without an
+  explicit operator approval; requests otherwise remain pending until the operator decides, and any
+  forced resolution (platform pause limit reached, or path failure) is **deny**.
 - **SC-004**: A push notification for a new attention/approval reaches a backgrounded, off-network
   phone within 10 seconds, and tapping it opens the correct item.
 - **SC-005**: A decision is applied at most once — duplicate/late deliveries cause 0 double-applies
   and never override a final outcome.
-- **SC-006**: 100% of decisions are audited (operator, machine, session, action, decision, time) and
-  refused when outside the operator's scope.
+- **SC-006**: 100% of decisions are audited (operator, machine, session, action, decision, time) over
+  an authenticated channel. (Per-machine/project scope enforcement is deferred with a single
+  operator; the design keeps room for it.)
 - **SC-007**: Mobile and web show the same machines/sessions/alerts, and an acknowledgement/decision
   on one appears on the other within 5 seconds.
 
@@ -233,10 +255,15 @@ timeout/disconnect and confirm the outcome is deny.
   permission hook posts to the on-machine agent, which forwards the request over its existing
   authenticated outbound channel and returns the operator's decision back to the waiting hook. The
   backend is never posted to directly, and nothing on the machine accepts external inbound.
-- **Approval timeout** defaults to a bounded wait (e.g. a few minutes) after which the outcome is
-  **deny**; the exact value is configurable and worth confirming in `/speckit.clarify`.
-- **Scope of prompts requiring approval**: tool-permission prompts Claude Code raises; the exact set
-  (all tools vs a configurable subset) is a default to confirm in `/speckit.clarify`.
+- **No ClaudeDriver approval timeout** (clarified): a request waits for the operator indefinitely.
+  The blocking hook is held open with a very long timeout so the instance stays paused until the
+  decision. Because Claude Code cannot pause an instance literally forever, if its own hard hook
+  limit is reached the request fails safe to **deny** (never auto-approve). This is the one place the
+  "unlimited wait" intent meets a platform limit; it is bounded only by that limit, and always to
+  deny.
+- **Scope of prompts requiring approval** (clarified): approval is requested for the actions Claude
+  Code itself would prompt on (respecting its own permission rules) — not for actions it would
+  auto-allow.
 - **Push may use a cloud delivery service** (the mobile push networks and a dispatcher); this is the
   one place a third-party path is expected, consistent with the earlier hosting decision.
 - **Away-from-network reach**: the mobile app talks to the internet-reachable (AWS-hosted) backend

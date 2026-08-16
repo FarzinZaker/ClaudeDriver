@@ -31,12 +31,15 @@
 
 ## Notes
 
-- Validation passed on first iteration.
-- Requirements are outcome-focused (approve/deny reaches the waiting instance, fail-safe deny, push
-  reaches an off-network phone, at-most-once, audited, scoped). Mechanisms (blocking PreToolUse hook,
-  Compose Multiplatform, FCM/APNs via SNS/Pinpoint) are deferred to `/speckit.plan`.
-- The **fail-safe = deny** property (FR-003, SC-003) is the load-bearing safety requirement and is
-  stated as an absolute (0% auto-approve) — it directly implements Constitution Principle I.
-- Two assumptions to confirm in `/speckit.clarify` before planning: the **approval timeout** value and
-  **which tool prompts** require approval (all vs a configurable subset).
-- Scope explicitly excludes answering arbitrary questions (Phase 4) and task dispatch (Phase 3).
+- Re-validated 2026-08-16 after `/speckit.clarify`: all items still pass (16/16); no checkbox changed.
+- Clarifications integrated: **no ClaudeDriver approval timeout** (wait until decided; fail-safe DENY
+  only as a platform/failure backstop), approval scope = **what Claude Code itself prompts on**,
+  mobile sign-in = **passkey (WebAuthn)**, and **single-operator full access** (scoping deferred).
+- **Reconciliation flagged for the author**: the "unlimited wait" answer cannot be taken literally —
+  Claude Code cannot pause an instance forever. The spec honors the intent (ClaudeDriver imposes no
+  timeout; the hook is held open with a very long timeout) while keeping Constitution Principle I's
+  non-negotiable fail-safe: any *forced* resolution (platform hard limit or path failure) is DENY,
+  never auto-approve. Confirm this reconciliation is acceptable before/at `/speckit.plan`.
+- Mechanisms (blocking PreToolUse hook, Compose Multiplatform, FCM/APNs via SNS/Pinpoint) remain
+  deferred to `/speckit.plan`.
+- Scope still excludes answering arbitrary questions (Phase 4) and task dispatch (Phase 3).
