@@ -37,3 +37,17 @@ bin/
 *.p8
 *.pem
 *-service-account.json
+### Gradle / build ###
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+### Node ###
+node_modules/
+web/dist/
+
+### Terraform ###
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
