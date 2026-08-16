@@ -50,6 +50,10 @@ the backend image (`infra/docker/Dockerfile`), supply an ACM cert + domain and t
 bundle, then `terraform init/plan/apply`. Never expose the backend without the mTLS + WebAuthn
 hardening in place.
 
+## Mobile
+
+The operator mobile app (Compose Multiplatform, iOS + Android) is a scaffold under `mobile/` — see [`mobile/README.md`](mobile/README.md). It is intentionally not part of the root build (needs the Android SDK/Xcode).
+
 ## Spec-driven development
 
 This project uses GitHub Spec Kit (generic integration). Commands live in `.claude/commands/`
