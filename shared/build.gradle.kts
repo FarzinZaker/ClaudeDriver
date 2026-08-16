@@ -9,8 +9,13 @@ plugins {
 // contract without changing its shape. Consumers (backend, agent) are unaffected.
 dependencies {
     api(libs.serialization.json)
+    testImplementation(libs.junit.jupiter)
 }
 
 kotlin {
     jvmToolchain(21)
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
