@@ -9,14 +9,22 @@ import com.claudedriver.backend.api.ErrorResponse
 import com.claudedriver.backend.api.RegisterOptionsRequest
 import com.claudedriver.backend.api.WhoAmIResponse
 import com.claudedriver.backend.api.AlertsResponse
+import com.claudedriver.backend.api.ApprovalsResponse
+import com.claudedriver.backend.api.DecideRequest
+import com.claudedriver.backend.api.DecideResponse
+import com.claudedriver.backend.api.DeviceRegisterRequest
 import com.claudedriver.backend.api.SessionsResponse
 import com.claudedriver.backend.api.toDto
+import com.claudedriver.backend.approvals.DecideOutcome
 import com.claudedriver.backend.audit.AuditAction
 import com.claudedriver.backend.connection.TrustService
 import com.claudedriver.backend.enrollment.EnrollmentException
 import com.claudedriver.backend.monitoring.AckResult
+import com.claudedriver.backend.ws.OutFrame
 import com.claudedriver.protocol.ActivityEvent
+import com.claudedriver.protocol.ApprovalRequest
 import com.claudedriver.protocol.Codec
+import com.claudedriver.protocol.Envelope
 import com.claudedriver.protocol.HelloAck
 import com.claudedriver.protocol.MessageType
 import com.claudedriver.protocol.PROTOCOL_VERSION
@@ -25,6 +33,10 @@ import com.claudedriver.protocol.ProcessSnapshot
 import com.claudedriver.protocol.ProtocolVersion
 import com.claudedriver.protocol.SampleEvent
 import com.claudedriver.protocol.VersionMismatch
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.encodeToJsonElement
+import java.util.concurrent.atomic.AtomicLong
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
@@ -35,6 +47,7 @@ import io.ktor.server.request.receiveText
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.RoutingContext
+import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
@@ -191,6 +204,41 @@ fun Application.configureRouting(deps: AppDeps) = routing {
         }
     }
 
+    // ---- Operator: approvals ----
+    get("/approvals") {
+        requireOperator(deps) ?: return@get
+        call.respond(ApprovalsResponse(deps.approvals.list().map { it.toDto() }))
+    }
+
+    post("/approvals/{id}/decide") {
+        val op = requireOperator(deps) ?: return@post
+        val decision = call.receive<DecideRequest>().decision
+        val approve = when (decision) {
+            "approve" -> true
+            "deny" -> false
+            else -> return@post call.respond(HttpStatusCode.BadRequest, ErrorResponse("bad_decision", "decision must be approve or deny"))
+        }
+        when (deps.approvals.decide(UUID.fromString(call.parameters["id"]), approve, op.handle, "web")) {
+            DecideOutcome.OK -> call.respond(HttpStatusCode.OK, DecideResponse(if (approve) "approved" else "denied"))
+            DecideOutcome.NOT_FOUND -> call.respond(HttpStatusCode.NotFound, ErrorResponse("not_found", "No such approval"))
+            DecideOutcome.ALREADY_RESOLVED -> call.respond(HttpStatusCode.Conflict, ErrorResponse("already_resolved", "Approval already resolved"))
+        }
+    }
+
+    // ---- Operator: push devices ----
+    post("/devices") {
+        val op = requireOperator(deps) ?: return@post
+        val req = call.receive<DeviceRegisterRequest>()
+        deps.devices.register(UUID.fromString(op.operatorId), req.token, req.platform)
+        call.respond(HttpStatusCode.Created)
+    }
+
+    delete("/devices/{token}") {
+        requireOperator(deps) ?: return@delete
+        deps.devices.unregister(call.parameters["token"] ?: "")
+        call.respond(HttpStatusCode.NoContent)
+    }
+
     // ---- Agent: enrollment & identity (mutual-TLS listener) ----
     post("/agent/enroll") {
         val req = call.receive<AgentEnrollRequest>()
@@ -274,12 +322,18 @@ private suspend fun DefaultWebSocketServerSession.handleAgentConnect(deps: AppDe
     val connectionId = deps.trust.openConnection(identity, hello.protocolVersion)
     deps.audit.append("machine:${identity.machineId}", AuditAction.CONNECTION_ACCEPTED, identity.machineId.toString())
 
-    val ack = Codec.envelope(
-        MessageType.HELLO_ACK,
-        ++seq,
-        HelloAck(identity.machineId.toString(), Instant.now().toString(), 30),
-    )
-    send(Frame.Text(Codec.encode(ack)))
+    // Single writer: a bounded outbound channel drained by a sender coroutine, so the backend can
+    // route frames (e.g. approval decisions) to this specific agent via the AgentHub.
+    val outSeq = AtomicLong(seq)
+    val outbound = Channel<OutFrame>(capacity = 64, onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST)
+    deps.agentHub.register(identity.machineId, outbound)
+    val sender = launch {
+        for (frame in outbound) {
+            send(Frame.Text(Codec.encode(Envelope(PROTOCOL_VERSION, frame.type, outSeq.incrementAndGet(), null, frame.payload))))
+        }
+    }
+
+    outbound.trySend(OutFrame(MessageType.HELLO_ACK, Codec.json.encodeToJsonElement(HelloAck(identity.machineId.toString(), Instant.now().toString(), 30))))
 
     try {
         for (frame in incoming) {
@@ -287,7 +341,7 @@ private suspend fun DefaultWebSocketServerSession.handleAgentConnect(deps: AppDe
             val env = runCatching { Codec.decode(frame.readText()) }.getOrNull() ?: continue
             when (env.type) {
                 MessageType.PING ->
-                    send(Frame.Text(Codec.encode(Codec.envelope(MessageType.PONG, ++seq, Pong(Instant.now().toString())))))
+                    outbound.trySend(OutFrame(MessageType.PONG, Codec.json.encodeToJsonElement(Pong(Instant.now().toString()))))
 
                 MessageType.SAMPLE_EVENT -> {
                     val sample = runCatching { Codec.decodePayload<SampleEvent>(env) }.getOrNull() ?: continue
@@ -305,11 +359,23 @@ private suspend fun DefaultWebSocketServerSession.handleAgentConnect(deps: AppDe
                 MessageType.ACTIVITY_EVENT -> {
                     val activity = runCatching { Codec.decodePayload<ActivityEvent>(env) }.getOrNull() ?: continue
                     deps.sessions.applyActivityEvent(identity.machineId, activity)
+                    if (activity.kind == "stop" || activity.kind == "session_end") {
+                        deps.approvals.mootForClaudeSession(identity.machineId, activity.claudeSessionId)
+                    }
+                    deps.trust.updateLastSeq(connectionId, env.seq)
+                }
+
+                MessageType.APPROVAL_REQUEST -> {
+                    val request = runCatching { Codec.decodePayload<ApprovalRequest>(env) }.getOrNull() ?: continue
+                    deps.approvals.raise(identity.machineId, request)
                     deps.trust.updateLastSeq(connectionId, env.seq)
                 }
             }
         }
     } finally {
+        deps.agentHub.unregister(identity.machineId, outbound)
+        outbound.close()
+        sender.cancel()
         deps.trust.closeConnection(connectionId)
     }
 }

@@ -1,5 +1,7 @@
 package com.claudedriver.agent
 
+import com.claudedriver.protocol.ApprovalDecision
+import com.claudedriver.protocol.ApprovalRequest
 import com.claudedriver.protocol.Codec
 import com.claudedriver.protocol.Envelope
 import com.claudedriver.protocol.Hello
@@ -9,6 +11,8 @@ import com.claudedriver.protocol.PROTOCOL_VERSION
 import com.claudedriver.protocol.Pong
 import com.claudedriver.protocol.SampleEvent
 import com.claudedriver.protocol.VersionMismatch
+import kotlinx.coroutines.CompletableDeferred
+import java.util.concurrent.ConcurrentHashMap
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.websocket.WebSockets
@@ -65,6 +69,26 @@ class AgentClient(
     private val outbound = Channel<OutFrame>(capacity = 256, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     private var seq = 0L
 
+    // Approvals held on the machine, awaiting the operator's decision over the WSS.
+    private val pendingApprovals = ConcurrentHashMap<String, CompletableDeferred<String>>()
+    @Volatile private var connected = false
+
+    /** Called by the loopback receiver for a blocking permission prompt; suspends until decided.
+     *  Fail-safe: returns "deny" if disconnected or the wait is interrupted (Constitution I). */
+    private suspend fun requestApproval(request: ApprovalRequest): String {
+        if (!connected) return "deny" // can't reach the operator → deny, never auto-approve
+        val deferred = CompletableDeferred<String>()
+        pendingApprovals[request.requestId] = deferred
+        emit(MessageType.APPROVAL_REQUEST, request)
+        return try {
+            deferred.await()
+        } catch (e: Exception) {
+            "deny"
+        } finally {
+            pendingApprovals.remove(request.requestId)
+        }
+    }
+
     private val keyFile get() = File(storageDir, "agent-key.pem")
     private val certFile get() = File(storageDir, "agent-cert.pem")
     private val caFile get() = File(storageDir, "ca-chain.pem")
@@ -101,9 +125,12 @@ class AgentClient(
         println("Installed Claude Code monitoring hooks → 127.0.0.1:$hookReceiverPort")
         println("Export this in the environment Claude Code runs in: export $hookTokenEnvVar=$hookToken")
 
-        HookReceiver(hookReceiverPort, hookToken) { activity ->
-            emit(MessageType.ACTIVITY_EVENT, activity)
-        }.start()
+        HookReceiver(
+            port = hookReceiverPort,
+            token = hookToken,
+            onEvent = { activity -> emit(MessageType.ACTIVITY_EVENT, activity) },
+            onApproval = { request -> requestApproval(request) },
+        ).start()
 
         launch {
             ProcessMonitor().run { snapshot -> emit(MessageType.PROCESS_SNAPSHOT, snapshot) }
@@ -141,6 +168,7 @@ class AgentClient(
                         MessageType.HELLO_ACK -> {
                             val ack = Codec.decodePayload<HelloAck>(env)
                             println("Connected as machine ${ack.machineId} (heartbeat ${ack.heartbeatSeconds}s)")
+                            connected = true
                             emit(MessageType.SAMPLE_EVENT, SampleEvent(ack.machineId, "agent online", Instant.now().toString()))
                         }
                         MessageType.VERSION_MISMATCH -> {
@@ -150,9 +178,17 @@ class AgentClient(
                             return@webSocket
                         }
                         MessageType.PING -> emit(MessageType.PONG, Pong(Instant.now().toString()))
+
+                        MessageType.APPROVAL_DECISION -> {
+                            val decision = Codec.decodePayload<ApprovalDecision>(env)
+                            pendingApprovals[decision.requestId]?.complete(decision.decision)
+                        }
                     }
                 }
             } finally {
+                connected = false
+                // Fail-safe: any prompt still waiting when the link drops is denied (never left open).
+                pendingApprovals.values.forEach { it.complete("deny") }
                 sender.cancel()
             }
         }

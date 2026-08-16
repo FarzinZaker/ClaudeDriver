@@ -9,9 +9,11 @@ import io.ktor.client.engine.cio.CIO
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsText
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -96,7 +98,36 @@ class SmokeTest {
             println("• alert AUTO-RESOLVED after the wait ended ✅")
 
             check(deps.alerts.list().any { it.status == "resolved" })
-            println("\nSMOKE PASS — session → alert → resolve verified over real HTTP/WSS + Postgres.")
+
+            // 7) Blocking approval — a real held PreToolUse hook → approval_request over WSS →
+            //    decide → the held hook returns allow/deny. Prove BOTH.
+            val approveHeld = async(Dispatchers.IO) {
+                http.post("http://127.0.0.1:$receiverPort/approve") {
+                    header("Authorization", "Bearer $token")
+                    setBody("""{"hook_event_name":"PreToolUse","session_id":"smoke-appr-1","tool_name":"Bash","cwd":"/tmp/proj","tool_input":{"command":"git push"}}""")
+                }.bodyAsText()
+            }
+            waitUntil(15_000) { deps.approvals.list().any { it.status == "pending" } }
+            val pending1 = deps.approvals.list().first { it.status == "pending" }
+            deps.approvals.decide(pending1.id, approve = true, operator = "smoke-op", surface = "web")
+            val approveResp = approveHeld.await()
+            check(approveResp.contains("\"permissionDecision\":\"allow\"")) { "approve should allow: $approveResp" }
+            println("• blocking approval APPROVED → allow ✅")
+
+            val denyHeld = async(Dispatchers.IO) {
+                http.post("http://127.0.0.1:$receiverPort/approve") {
+                    header("Authorization", "Bearer $token")
+                    setBody("""{"hook_event_name":"PreToolUse","session_id":"smoke-appr-2","tool_name":"Bash","cwd":"/tmp/proj","tool_input":{"command":"rm -rf x"}}""")
+                }.bodyAsText()
+            }
+            waitUntil(15_000) { deps.approvals.list().any { it.status == "pending" } }
+            val pending2 = deps.approvals.list().first { it.status == "pending" }
+            deps.approvals.decide(pending2.id, approve = false, operator = "smoke-op", surface = "web")
+            val denyResp = denyHeld.await()
+            check(denyResp.contains("\"permissionDecision\":\"deny\"")) { "deny should deny: $denyResp" }
+            println("• blocking approval DENIED → deny ✅")
+
+            println("\nSMOKE PASS — monitoring + alerts + remote approve/deny verified over real HTTP/WSS + Postgres.")
             agentJob.cancel()
         } finally {
             http.close()

@@ -10,7 +10,7 @@
  */
 
 /** Semver of the shared protocol contract this client speaks. */
-export const PROTOCOL_VERSION = '0.2.0';
+export const PROTOCOL_VERSION = '0.3.0';
 
 // ---------------------------------------------------------------------------
 // REST — GET /status
@@ -269,5 +269,87 @@ export function isAlertEventEnvelope(
     typeof p.machineId === 'string' &&
     typeof p.status === 'string' &&
     typeof p.summary === 'string'
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 — Remote approvals (specs/003-remote-approvals)
+//   REST additions:  contracts/rest-api-additions.md
+//   Protocol adds:   contracts/protocol-additions.md
+// ---------------------------------------------------------------------------
+
+/**
+ * Lifecycle of a remote tool-permission approval request. `pending` blocks a
+ * real waiting Claude Code instance; the terminal states are `approved`,
+ * `denied`, and `moot` (the instance disappeared before a decision).
+ */
+export type ApprovalStatus = 'pending' | 'approved' | 'denied' | 'moot';
+
+/**
+ * A remote approval request as returned by `GET /approvals` (`decidedBy` and
+ * `reason` are populated once a decision or resolution has occurred).
+ */
+export interface ApprovalSummary {
+  id: string;
+  machineId: string;
+  machineName: string;
+  /** The Claude Code session that raised the permission prompt. */
+  claudeSessionId: string;
+  /** The tool Claude Code asked to use (e.g. `Bash`). */
+  tool: string;
+  /** Human summary of the exact action requested (e.g. ``Bash: `git push` ``). */
+  summary: string;
+  status: ApprovalStatus;
+  /** RFC3339 timestamp of when the request was raised. */
+  createdAt: string;
+  /** Who decided it (`operator`), or null while pending. */
+  decidedBy?: string | null;
+  /** Decision/resolution reason, or null while pending. */
+  reason?: string | null;
+}
+
+/** Response body of `GET /approvals`. */
+export interface ApprovalsResponse {
+  approvals: ApprovalSummary[];
+}
+
+// --- WebSocket: approval_event -------------------------------------------
+
+/**
+ * `approval_event` payload. Unlike `alert_event`, the wire carries
+ * `machineName` directly, and uses `approvalId` (not `id`) with `at` (not
+ * `createdAt`).
+ */
+export interface ApprovalEventPayload {
+  approvalId: string;
+  machineId: string;
+  machineName: string;
+  claudeSessionId: string;
+  tool: string;
+  summary: string;
+  status: ApprovalStatus;
+  /** RFC3339 timestamp of the raise/decision/resolution. */
+  at: string;
+  decidedBy?: string | null;
+  reason?: string | null;
+}
+
+export type ApprovalEventEnvelope = Envelope<ApprovalEventPayload> & {
+  type: 'approval_event';
+};
+
+/** Narrowing guard for an incoming `approval_event` envelope. */
+export function isApprovalEventEnvelope(
+  env: Envelope<unknown>,
+): env is ApprovalEventEnvelope {
+  if (env.type !== 'approval_event') return false;
+  const p = env.payload as Partial<ApprovalEventPayload> | null;
+  return (
+    !!p &&
+    typeof p.approvalId === 'string' &&
+    typeof p.machineId === 'string' &&
+    typeof p.tool === 'string' &&
+    typeof p.summary === 'string' &&
+    typeof p.status === 'string'
   );
 }

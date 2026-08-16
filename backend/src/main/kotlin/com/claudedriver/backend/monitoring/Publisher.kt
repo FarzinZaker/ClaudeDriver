@@ -2,6 +2,7 @@ package com.claudedriver.backend.monitoring
 
 import com.claudedriver.backend.ws.OperatorHub
 import com.claudedriver.protocol.AlertEvent
+import com.claudedriver.protocol.ApprovalEvent
 import com.claudedriver.protocol.Codec
 import com.claudedriver.protocol.MessageType
 import com.claudedriver.protocol.SessionUpdate
@@ -17,5 +18,9 @@ class Publisher(private val hub: OperatorHub) {
 
     suspend fun alertEvent(event: AlertEvent) {
         hub.broadcast(Codec.encode(Codec.envelope(MessageType.ALERT_EVENT, seq.incrementAndGet(), event)))
+    }
+
+    suspend fun approvalEvent(event: ApprovalEvent) {
+        hub.broadcast(Codec.encode(Codec.envelope(MessageType.APPROVAL_EVENT, seq.incrementAndGet(), event)))
     }
 }

@@ -5,6 +5,8 @@ import App from './App';
 import type {
   AlertEventPayload,
   AlertSummary,
+  ApprovalEventPayload,
+  ApprovalSummary,
   Envelope,
   SampleEventPayload,
   SessionSummary,
@@ -44,8 +46,28 @@ const STATUS: StatusResponse = {
 const SESSION_RUNNING = 'aaaaaaaa-0000-0000-0000-000000000001';
 const SESSION_WAITING = 'aaaaaaaa-0000-0000-0000-000000000002';
 
+const APPROVAL_ID = 'dddddddd-0000-0000-0000-000000000001';
+
 let SESSIONS: SessionSummary[];
 let ALERTS: AlertSummary[];
+let APPROVALS: ApprovalSummary[];
+
+function makeApprovals(): ApprovalSummary[] {
+  return [
+    {
+      id: APPROVAL_ID,
+      machineId: MACHINE_ALPHA,
+      machineName: 'alpha-macbook',
+      claudeSessionId: 'abc-123-session',
+      tool: 'Bash',
+      summary: 'Bash: `git push origin main`',
+      status: 'pending',
+      createdAt: '2026-08-16T12:00:30Z',
+      decidedBy: null,
+      reason: null,
+    },
+  ];
+}
 
 function makeSessions(): SessionSummary[] {
   return [
@@ -87,6 +109,7 @@ function routeFetch(input: RequestInfo | URL): Response {
   if (path === '/status') return jsonResponse(STATUS);
   if (path === '/sessions') return jsonResponse({ sessions: SESSIONS });
   if (path === '/alerts') return jsonResponse({ alerts: ALERTS });
+  if (path === '/approvals') return jsonResponse({ approvals: APPROVALS });
   if (/^\/sessions\/[^/]+$/.test(path)) {
     const id = decodeURIComponent(path.split('/')[2]);
     const session = SESSIONS.find((s) => s.id === id) ?? SESSIONS[0];
@@ -105,6 +128,9 @@ function routeFetch(input: RequestInfo | URL): Response {
   if (/^\/alerts\/[^/]+\/ack$/.test(path)) {
     return new Response(null, { status: 204 });
   }
+  if (/^\/approvals\/[^/]+\/decide$/.test(path)) {
+    return jsonResponse({ status: 'approved' });
+  }
   return jsonResponse({}, 404);
 }
 
@@ -122,6 +148,7 @@ function renderApp() {
 beforeEach(() => {
   SESSIONS = makeSessions();
   ALERTS = [];
+  APPROVALS = [];
   MockWebSocket.reset();
   vi.stubGlobal('WebSocket', MockWebSocket as unknown as typeof WebSocket);
   fetchMock = vi.fn(async (input: RequestInfo | URL) => routeFetch(input));
@@ -280,6 +307,76 @@ describe('operator dashboard', () => {
     const item = await screen.findByTestId('inbox-item');
     expect(within(item).getByText('hello from alpha')).toBeInTheDocument();
     expect(screen.getAllByTestId('inbox-item')).toHaveLength(1);
+  });
+
+  it('renders a pending approval from /approvals with Approve/Deny', async () => {
+    APPROVALS = makeApprovals();
+    renderApp();
+
+    const item = await screen.findByTestId('approval-item');
+    expect(within(item).getByText('Bash: `git push origin main`')).toBeInTheDocument();
+    expect(within(item).getByText('alpha-macbook')).toBeInTheDocument();
+    expect(within(item).getByTestId('approval-approve')).toBeInTheDocument();
+    expect(within(item).getByTestId('approval-deny')).toBeInTheDocument();
+  });
+
+  it('clicking Approve calls the decide endpoint', async () => {
+    APPROVALS = makeApprovals();
+    renderApp();
+
+    const item = await screen.findByTestId('approval-item');
+    act(() => within(item).getByTestId('approval-approve').click());
+
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([input, init]) => {
+          const url = typeof input === 'string' ? input : (input as URL).href ?? '';
+          return (
+            String(url).includes(`/approvals/${APPROVAL_ID}/decide`) &&
+            (init as RequestInit | undefined)?.method === 'POST' &&
+            String((init as RequestInit | undefined)?.body ?? '').includes('approve')
+          );
+        }),
+      ).toBe(true),
+    );
+  });
+
+  it('removes an approval from the pending list on an approved approval_event', async () => {
+    APPROVALS = makeApprovals();
+    renderApp();
+
+    await screen.findByTestId('approval-item');
+    await waitFor(() => expect(MockWebSocket.last).toBeDefined());
+
+    const ws = MockWebSocket.last!;
+    act(() => ws.emitOpen());
+
+    const payload: ApprovalEventPayload = {
+      approvalId: APPROVAL_ID,
+      machineId: MACHINE_ALPHA,
+      machineName: 'alpha-macbook',
+      claudeSessionId: 'abc-123-session',
+      tool: 'Bash',
+      summary: 'Bash: `git push origin main`',
+      status: 'approved',
+      at: '2026-08-16T12:00:40Z',
+      decidedBy: 'operator',
+      reason: null,
+    };
+    const envelope: Envelope<ApprovalEventPayload> = {
+      protocolVersion: '0.3.0',
+      type: 'approval_event',
+      seq: 5,
+      payload,
+    };
+    act(() => ws.emitMessage(envelope));
+
+    await waitFor(() =>
+      expect(screen.queryByTestId('approval-item')).not.toBeInTheDocument(),
+    );
+    // The pending heading drops to zero; it now shows resolved for context.
+    expect(screen.getByText(/Approvals \(0\)/)).toBeInTheDocument();
+    expect(screen.getByTestId('approval-resolved-item')).toBeInTheDocument();
   });
 
   it('shows connection stream status once the socket opens', async () => {

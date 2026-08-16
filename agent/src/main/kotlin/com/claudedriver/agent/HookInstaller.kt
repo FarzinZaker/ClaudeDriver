@@ -40,22 +40,19 @@ object HookInstaller {
 
     /** Pure: return a settings object with our managed hooks installed. */
     fun install(root: JsonObject, port: Int, envVar: String): JsonObject {
-        val url = "http://127.0.0.1:$port/hook"
-        val managedGroup = buildJsonObject {
-            putJsonArray("hooks") {
-                addJsonObject {
-                    put("type", "http")
-                    put("url", url)
-                    putJsonObject("headers") { put("Authorization", "Bearer \$$envVar") }
-                    putJsonArray("allowedEnvVars") { add(envVar) }
-                }
-            }
-        }
+        // Activity hooks (non-blocking, → /hook) and the blocking approval hook (→ /approve).
+        val activityGroup = group("http://127.0.0.1:$port/hook", envVar, matcher = null, timeoutSeconds = null)
+        val approvalGroup = group("http://127.0.0.1:$port/approve", envVar, matcher = "Bash|Write|Edit", timeoutSeconds = 86400)
         val existingHooks = root["hooks"] as? JsonObject ?: JsonObject(emptyMap())
         val newHooks = buildJsonObject {
-            for (event in (existingHooks.keys + MANAGED_EVENTS).distinct()) {
+            for (event in (existingHooks.keys + MANAGED_EVENTS + "PreToolUse").distinct()) {
                 val prior = (existingHooks[event] as? JsonArray)?.filterNot { isManaged(it) } ?: emptyList()
-                put(event, JsonArray(if (event in MANAGED_EVENTS) prior + managedGroup else prior))
+                val arr = when {
+                    event == "PreToolUse" -> prior + approvalGroup
+                    event in MANAGED_EVENTS -> prior + activityGroup
+                    else -> prior
+                }
+                put(event, JsonArray(arr))
             }
         }
         return buildJsonObject {
@@ -63,6 +60,19 @@ object HookInstaller {
             put("hooks", newHooks)
             put("allowedHttpHookUrls", mergeStrings(root["allowedHttpHookUrls"], LOOPBACK_URL_PATTERN))
             put("httpHookAllowedEnvVars", mergeStrings(root["httpHookAllowedEnvVars"], envVar))
+        }
+    }
+
+    private fun group(url: String, envVar: String, matcher: String?, timeoutSeconds: Int?) = buildJsonObject {
+        if (matcher != null) put("matcher", matcher)
+        putJsonArray("hooks") {
+            addJsonObject {
+                put("type", "http")
+                put("url", url)
+                putJsonObject("headers") { put("Authorization", "Bearer \$$envVar") }
+                putJsonArray("allowedEnvVars") { add(envVar) }
+                if (timeoutSeconds != null) put("timeout", timeoutSeconds)
+            }
         }
     }
 
@@ -88,7 +98,7 @@ object HookInstaller {
         val hooks = (group as? JsonObject)?.get("hooks") as? JsonArray ?: return false
         return hooks.any { h ->
             val u = (h as? JsonObject)?.get("url")?.jsonPrimitive?.contentOrNull ?: return@any false
-            "127.0.0.1" in u && "/hook" in u
+            "127.0.0.1" in u // our loopback receiver (/hook or /approve)
         }
     }
 

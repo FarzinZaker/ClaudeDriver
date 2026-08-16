@@ -1,5 +1,6 @@
 import type {
   AlertSummary,
+  ApprovalSummary,
   Machine,
   SampleEventRecord,
   ServerInfo,
@@ -8,6 +9,7 @@ import type {
 } from '../types';
 import type { WsStatus } from '../ws/client';
 import { AlertInbox } from './AlertInbox';
+import { ApprovalsPanel } from './ApprovalsPanel';
 import { ConnectionHealth } from './ConnectionHealth';
 import { SESSION_STATE_LABEL } from './SessionDetail';
 
@@ -16,11 +18,15 @@ interface Props {
   machines: Machine[];
   sessions: SessionSummary[];
   alerts: AlertSummary[];
+  approvals: ApprovalSummary[];
   recentSampleEvents: SampleEventRecord[];
   wsStatus: WsStatus;
   onLogout?: () => void;
   onAckAlert: (id: string) => void;
   ackPendingId?: string | null;
+  onDecideApproval: (id: string, decision: 'approve' | 'deny') => void;
+  decidePendingId?: string | null;
+  approvalNotes?: Record<string, string>;
   onOpenSession: (sessionId: string) => void;
 }
 
@@ -134,11 +140,15 @@ export function StatusView({
   machines,
   sessions,
   alerts,
+  approvals,
   recentSampleEvents,
   wsStatus,
   onLogout,
   onAckAlert,
   ackPendingId,
+  onDecideApproval,
+  decidePendingId,
+  approvalNotes,
   onOpenSession,
 }: Props) {
   const sessionsByMachine = new Map<string, SessionSummary[]>();
@@ -165,6 +175,13 @@ export function StatusView({
       </header>
 
       <ConnectionHealth wsStatus={wsStatus} machines={machines} />
+
+      <ApprovalsPanel
+        approvals={approvals}
+        onDecide={onDecideApproval}
+        decidePendingId={decidePendingId}
+        notes={approvalNotes}
+      />
 
       <AlertInbox
         alerts={alerts}

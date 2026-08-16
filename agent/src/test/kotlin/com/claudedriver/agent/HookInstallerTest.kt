@@ -18,7 +18,9 @@ class HookInstallerTest {
 
         HookInstaller.installToFile(tmp, 8765, envVar)
         val afterInstall = tmp.readText()
-        assertTrue(afterInstall.contains("127.0.0.1:8765/hook"), "managed hook installed")
+        assertTrue(afterInstall.contains("127.0.0.1:8765/hook"), "managed activity hook installed")
+        assertTrue(afterInstall.contains("127.0.0.1:8765/approve"), "blocking approval hook installed")
+        assertTrue(afterInstall.contains("PreToolUse"), "PreToolUse approval hook present")
         assertTrue(afterInstall.contains("echo hi"), "user hook preserved")
         assertTrue(afterInstall.contains("opus"), "user config preserved")
 

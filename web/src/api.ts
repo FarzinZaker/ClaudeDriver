@@ -3,6 +3,9 @@
 import type {
   AlertSummary,
   AlertsResponse,
+  ApprovalStatus,
+  ApprovalSummary,
+  ApprovalsResponse,
   SessionDetail,
   SessionSummary,
   SessionsResponse,
@@ -15,6 +18,8 @@ export const STATUS_QUERY_KEY = ['status'] as const;
 export const SESSIONS_QUERY_KEY = ['sessions'] as const;
 /** TanStack Query key for the seeded `/alerts` inbox. */
 export const ALERTS_QUERY_KEY = ['alerts'] as const;
+/** TanStack Query key for the seeded `/approvals` inbox. */
+export const APPROVALS_QUERY_KEY = ['approvals'] as const;
 /** TanStack Query key factory for a single session's detail. */
 export const sessionDetailQueryKey = (id: string) =>
   ['session', id] as const;
@@ -95,4 +100,52 @@ export async function ackAlert(id: string): Promise<void> {
   if (!res.ok) {
     throw new ApiError(`POST /alerts/${id}/ack failed: ${res.status}`, res.status);
   }
+}
+
+/** Lists pending + recent approval requests for the inbox (`GET /approvals`). */
+export async function fetchApprovals(): Promise<ApprovalSummary[]> {
+  const res = await fetch('/approvals', {
+    credentials: 'include',
+    headers: { accept: 'application/json' },
+  });
+  if (!res.ok) {
+    throw new ApiError(`GET /approvals failed: ${res.status}`, res.status);
+  }
+  const body = (await res.json()) as ApprovalsResponse;
+  return body.approvals ?? [];
+}
+
+/** Outcome of a decide call: either it applied, or it was already resolved. */
+export type DecideResult =
+  | { outcome: 'applied'; status: Extract<ApprovalStatus, 'approved' | 'denied'> }
+  | { outcome: 'already_resolved' };
+
+/**
+ * Decides a pending approval (`POST /approvals/{id}/decide`).
+ * - `200` → `{ outcome: 'applied', status }`.
+ * - `409 already_resolved` → `{ outcome: 'already_resolved' }` (handled
+ *   gracefully; the first decision on another surface already won).
+ * Any other non-OK status is surfaced as an {@link ApiError}.
+ */
+export async function decideApproval(
+  id: string,
+  decision: 'approve' | 'deny',
+): Promise<DecideResult> {
+  const res = await fetch(`/approvals/${encodeURIComponent(id)}/decide`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({ decision }),
+  });
+  if (res.status === 409) {
+    return { outcome: 'already_resolved' };
+  }
+  if (!res.ok) {
+    throw new ApiError(
+      `POST /approvals/${id}/decide failed: ${res.status}`,
+      res.status,
+    );
+  }
+  const body = (await res.json()) as { status: 'approved' | 'denied' };
+  return { outcome: 'applied', status: body.status };
 }

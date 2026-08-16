@@ -4,7 +4,10 @@ import {
   ackAlert,
   ALERTS_QUERY_KEY,
   ApiError,
+  APPROVALS_QUERY_KEY,
+  decideApproval,
   fetchAlerts,
+  fetchApprovals,
   fetchSessionDetail,
   fetchSessions,
   fetchStatus,
@@ -19,6 +22,8 @@ import { StatusView } from './components/StatusView';
 import type {
   AlertEventPayload,
   AlertSummary,
+  ApprovalEventPayload,
+  ApprovalSummary,
   SampleEventPayload,
   SampleEventRecord,
   SessionSummary,
@@ -121,10 +126,49 @@ function applyAlertEvent(
   return next;
 }
 
+/**
+ * Patch a live `approval_event` into the cached approvals inbox. `pending`
+ * upserts the request; `approved`/`denied`/`moot` update its status in place so
+ * the panel drops it from the pending list (keeping it briefly as resolved).
+ * The payload carries `machineName` directly (unlike `alert_event`).
+ */
+function applyApprovalEvent(
+  prev: ApprovalSummary[] | undefined,
+  ev: ApprovalEventPayload,
+): ApprovalSummary[] {
+  const list = prev ?? [];
+  const idx = list.findIndex((a) => a.id === ev.approvalId);
+  if (idx === -1) {
+    const created: ApprovalSummary = {
+      id: ev.approvalId,
+      machineId: ev.machineId,
+      machineName: ev.machineName,
+      claudeSessionId: ev.claudeSessionId,
+      tool: ev.tool,
+      summary: ev.summary,
+      status: ev.status,
+      createdAt: ev.at,
+      decidedBy: ev.decidedBy ?? null,
+      reason: ev.reason ?? null,
+    };
+    return [created, ...list];
+  }
+  const next = list.slice();
+  next[idx] = {
+    ...next[idx],
+    status: ev.status,
+    summary: ev.summary,
+    decidedBy: ev.decidedBy ?? next[idx].decidedBy ?? null,
+    reason: ev.reason ?? next[idx].reason ?? null,
+  };
+  return next;
+}
+
 export default function App() {
   const queryClient = useQueryClient();
   const [wsStatus, setWsStatus] = useState<WsStatus>('closed');
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [approvalNotes, setApprovalNotes] = useState<Record<string, string>>({});
 
   const statusQuery = useQuery({
     queryKey: STATUS_QUERY_KEY,
@@ -150,6 +194,12 @@ export default function App() {
     enabled: authenticated,
   });
 
+  const approvalsQuery = useQuery({
+    queryKey: APPROVALS_QUERY_KEY,
+    queryFn: fetchApprovals,
+    enabled: authenticated,
+  });
+
   const sessionDetailQuery = useQuery({
     queryKey: sessionDetailQueryKey(selectedSessionId ?? ''),
     queryFn: () => fetchSessionDetail(selectedSessionId as string),
@@ -163,6 +213,32 @@ export default function App() {
       queryClient.setQueryData<AlertSummary[]>(ALERTS_QUERY_KEY, (prev) =>
         (prev ?? []).map((a) =>
           a.id === id ? { ...a, status: 'acknowledged' as const } : a,
+        ),
+      );
+    },
+  });
+
+  const decideMutation = useMutation({
+    mutationFn: ({ id, decision }: { id: string; decision: 'approve' | 'deny' }) =>
+      decideApproval(id, decision),
+    onMutate: ({ id }) => {
+      // Clear any stale note from a previous attempt on this request.
+      setApprovalNotes((prev) => {
+        if (!(id in prev)) return prev;
+        const { [id]: _drop, ...rest } = prev;
+        return rest;
+      });
+    },
+    onSuccess: (result, { id, decision }) => {
+      if (result.outcome === 'already_resolved') {
+        setApprovalNotes((prev) => ({ ...prev, [id]: 'Already resolved on another surface.' }));
+        return;
+      }
+      // Optimistic local transition; the WS `approval_event` will confirm.
+      const status = decision === 'approve' ? 'approved' : 'denied';
+      queryClient.setQueryData<ApprovalSummary[]>(APPROVALS_QUERY_KEY, (prev) =>
+        (prev ?? []).map((a) =>
+          a.id === id ? { ...a, status, decidedBy: 'operator' } : a,
         ),
       );
     },
@@ -204,6 +280,15 @@ export default function App() {
     [queryClient, resolveMachineName],
   );
 
+  const onApprovalEvent = useCallback(
+    (event: ApprovalEventPayload) => {
+      queryClient.setQueryData<ApprovalSummary[]>(APPROVALS_QUERY_KEY, (prev) =>
+        applyApprovalEvent(prev, event),
+      );
+    },
+    [queryClient],
+  );
+
   // Open the operator WS only while authenticated; tear down on logout/unmount.
   useEffect(() => {
     if (!authenticated) {
@@ -215,10 +300,11 @@ export default function App() {
       onSampleEvent,
       onSessionUpdate,
       onAlertEvent,
+      onApprovalEvent,
     });
     client.connect();
     return () => client.close();
-  }, [authenticated, onSampleEvent, onSessionUpdate, onAlertEvent]);
+  }, [authenticated, onSampleEvent, onSessionUpdate, onAlertEvent, onApprovalEvent]);
 
   const handleAuthenticated = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: STATUS_QUERY_KEY });
@@ -229,9 +315,11 @@ export default function App() {
       await logout();
     } finally {
       setSelectedSessionId(null);
+      setApprovalNotes({});
       queryClient.removeQueries({ queryKey: STATUS_QUERY_KEY });
       queryClient.removeQueries({ queryKey: SESSIONS_QUERY_KEY });
       queryClient.removeQueries({ queryKey: ALERTS_QUERY_KEY });
+      queryClient.removeQueries({ queryKey: APPROVALS_QUERY_KEY });
       void queryClient.resetQueries({ queryKey: STATUS_QUERY_KEY });
     }
   }, [queryClient]);
@@ -265,11 +353,15 @@ export default function App() {
         machines={data.machines}
         sessions={sessionsQuery.data ?? []}
         alerts={alertsQuery.data ?? []}
+        approvals={approvalsQuery.data ?? []}
         recentSampleEvents={data.recentSampleEvents}
         wsStatus={wsStatus}
         onLogout={() => void handleLogout()}
         onAckAlert={(id) => ackMutation.mutate(id)}
         ackPendingId={ackMutation.isPending ? ackMutation.variables : null}
+        onDecideApproval={(id, decision) => decideMutation.mutate({ id, decision })}
+        decidePendingId={decideMutation.isPending ? decideMutation.variables.id : null}
+        approvalNotes={approvalNotes}
         onOpenSession={setSelectedSessionId}
       />
       {selectedSessionId != null && (

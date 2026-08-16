@@ -15,7 +15,7 @@ import kotlinx.serialization.json.encodeToJsonElement
  */
 
 /** Current contract version. Bump in the same change set as any wire change. */
-const val PROTOCOL_VERSION: String = "0.2.0"
+const val PROTOCOL_VERSION: String = "0.3.0"
 
 /** Message type discriminators carried in the envelope `type` field. */
 object MessageType {
@@ -33,6 +33,11 @@ object MessageType {
     // Phase 1 (monitoring) — backend → operator
     const val SESSION_UPDATE = "session_update"
     const val ALERT_EVENT = "alert_event"
+
+    // Phase 2 (approvals) — agent ↔ backend and backend → operator
+    const val APPROVAL_REQUEST = "approval_request"   // agent → backend (held blocking hook)
+    const val APPROVAL_DECISION = "approval_decision" // backend → agent (routed decision)
+    const val APPROVAL_EVENT = "approval_event"       // backend → operator (live UI)
 }
 
 /**
@@ -155,6 +160,40 @@ data class AlertEvent(
     val summary: String,
     val raisedAt: String,
     val resolvedReason: String? = null,
+)
+
+// ---- Phase 2 payload types (contracts/protocol-additions.md) ---------------------------------
+
+@kotlinx.serialization.Serializable
+data class ApprovalRequest(
+    val requestId: String,
+    val claudeSessionId: String,
+    val tool: String,
+    val summary: String,
+    val detail: String = "{}",
+    val projectPath: String? = null,
+    val at: String,
+)
+
+@kotlinx.serialization.Serializable
+data class ApprovalDecision(
+    val requestId: String,
+    val decision: String, // "approve" | "deny"
+    val reason: String = "operator",
+)
+
+@kotlinx.serialization.Serializable
+data class ApprovalEvent(
+    val approvalId: String,
+    val machineId: String,
+    val machineName: String,
+    val claudeSessionId: String,
+    val tool: String,
+    val summary: String,
+    val status: String, // pending | approved | denied | moot
+    val at: String,
+    val decidedBy: String? = null,
+    val reason: String? = null,
 )
 
 /** Encode/decode helpers so no consumer re-implements the framing. */

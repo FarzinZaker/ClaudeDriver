@@ -7,12 +7,17 @@ import com.claudedriver.backend.auth.WebAuthnService
 import com.claudedriver.backend.ca.DeviceCa
 import com.claudedriver.backend.config.Config
 import com.claudedriver.backend.connection.TrustService
+import com.claudedriver.backend.approvals.ApprovalService
 import com.claudedriver.backend.enrollment.EnrollmentService
 import com.claudedriver.backend.monitoring.AlertService
 import com.claudedriver.backend.monitoring.AttentionClassifier
 import com.claudedriver.backend.monitoring.Publisher
 import com.claudedriver.backend.monitoring.SessionRegistry
 import com.claudedriver.backend.persistence.Db
+import com.claudedriver.backend.push.DeviceStore
+import com.claudedriver.backend.push.LoggingPushSender
+import com.claudedriver.backend.push.PushService
+import com.claudedriver.backend.ws.AgentHub
 import com.claudedriver.backend.ws.OperatorHub
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -49,6 +54,9 @@ class AppDeps(
     val operatorStore: OperatorStore,
     val sessions: SessionRegistry,
     val alerts: AlertService,
+    val agentHub: AgentHub,
+    val approvals: ApprovalService,
+    val devices: DeviceStore,
 ) {
     companion object {
         fun create(config: Config, database: Database): AppDeps {
@@ -58,10 +66,15 @@ class AppDeps(
             val ca = DeviceCa.generate()
             val operatorStore = OperatorStore(database)
             val hub = OperatorHub()
+            val agentHub = AgentHub()
             val publisher = Publisher(hub)
             val classifier = AttentionClassifier()
             val alerts = AlertService(database, audit, publisher)
             val sessions = SessionRegistry(database, classifier, alerts, publisher)
+            val devices = DeviceStore(database)
+            // Dev uses a logging push sender; prod swaps in SnsPushSender at deploy.
+            val push = PushService(devices, LoggingPushSender())
+            val approvals = ApprovalService(database, audit, publisher, agentHub, push)
             return AppDeps(
                 config = config,
                 database = database,
@@ -75,6 +88,9 @@ class AppDeps(
                 operatorStore = operatorStore,
                 sessions = sessions,
                 alerts = alerts,
+                agentHub = agentHub,
+                approvals = approvals,
+                devices = devices,
             )
         }
     }

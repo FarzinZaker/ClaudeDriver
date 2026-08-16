@@ -1,6 +1,7 @@
 package com.claudedriver.agent
 
 import com.claudedriver.protocol.ActivityEvent
+import com.claudedriver.protocol.ApprovalRequest
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.cio.CIO
@@ -17,17 +18,21 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.time.Instant
+import java.util.UUID
 
 /**
- * A loopback-only HTTP receiver for Claude Code hooks. Claude Code POSTs hook events here
- * (127.0.0.1, token-checked); we translate them to [ActivityEvent]s and hand them to [onEvent] for
- * forwarding over the agent's outbound channel. Responds immediately so Claude Code is never blocked
- * (Constitution Principle I / IV).
+ * Loopback-only HTTP receiver for Claude Code hooks:
+ *  - `/hook`    (non-blocking) — activity events → [onEvent] (Phase 1).
+ *  - `/approve` (BLOCKING)     — a tool-permission prompt; holds the response, calls [onApproval]
+ *                                (which awaits the operator's decision over the outbound WSS), and
+ *                                returns Claude Code's permission decision. Anything unparseable or a
+ *                                failed decision resolves to DENY (fail-safe, Constitution I).
  */
 class HookReceiver(
     private val port: Int,
     private val token: String,
     private val onEvent: suspend (ActivityEvent) -> Unit,
+    private val onApproval: suspend (ApprovalRequest) -> String = { "deny" },
 ) {
     private var server: EmbeddedServer<*, *>? = null
     private val json = Json { ignoreUnknownKeys = true }
@@ -37,12 +42,22 @@ class HookReceiver(
             routing {
                 post("/hook") {
                     if (call.request.header("Authorization") != "Bearer $token") {
-                        call.respond(HttpStatusCode.Unauthorized)
-                        return@post
+                        call.respond(HttpStatusCode.Unauthorized); return@post
                     }
-                    val body = call.receiveText()
-                    parse(body)?.let { onEvent(it) }
+                    parse(call.receiveText())?.let { onEvent(it) }
                     call.respondText("{}", ContentType.Application.Json)
+                }
+                post("/approve") {
+                    if (call.request.header("Authorization") != "Bearer $token") {
+                        call.respond(HttpStatusCode.Unauthorized); return@post
+                    }
+                    val request = parseApproval(call.receiveText())
+                    val decision = if (request == null) "deny" else onApproval(request)
+                    val permission = if (decision == "approve") "allow" else "deny"
+                    call.respondText(
+                        """{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"$permission","permissionDecisionReason":"ClaudeDriver: $decision"}}""",
+                        ContentType.Application.Json,
+                    )
                 }
             }
         }.start(wait = false)
@@ -52,7 +67,7 @@ class HookReceiver(
         server?.stop(500, 1000)
     }
 
-    /** Translate a Claude Code hook payload into an ActivityEvent. Returns null if unparseable. */
+    /** Translate a Claude Code activity hook payload into an ActivityEvent (Phase 1). */
     fun parse(body: String): ActivityEvent? {
         val obj = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: return null
         val eventName = obj["hook_event_name"]?.jsonPrimitive?.contentOrNull ?: return null
@@ -74,13 +89,26 @@ class HookReceiver(
             kind == "session_end" -> "session ended"
             else -> kind
         }
-        return ActivityEvent(
+        return ActivityEvent(sessionId, kind, notificationType, cwd, summary, body, Instant.now().toString())
+    }
+
+    /** Build an ApprovalRequest from a PreToolUse hook payload. Returns null if unparseable. */
+    fun parseApproval(body: String): ApprovalRequest? {
+        val obj = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: return null
+        val sessionId = obj["session_id"]?.jsonPrimitive?.contentOrNull ?: return null
+        val tool = obj["tool_name"]?.jsonPrimitive?.contentOrNull ?: "tool"
+        val cwd = obj["cwd"]?.jsonPrimitive?.contentOrNull
+        val input = obj["tool_input"]?.jsonObject
+        val detailBit = input?.get("command")?.jsonPrimitive?.contentOrNull
+            ?: input?.get("file_path")?.jsonPrimitive?.contentOrNull
+        val summary = if (detailBit != null) "$tool: `$detailBit`" else tool
+        return ApprovalRequest(
+            requestId = UUID.randomUUID().toString(),
             claudeSessionId = sessionId,
-            kind = kind,
-            notificationType = notificationType,
-            projectPath = cwd,
+            tool = tool,
             summary = summary,
             detail = body,
+            projectPath = cwd,
             at = Instant.now().toString(),
         )
     }
