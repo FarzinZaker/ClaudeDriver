@@ -1,0 +1,14 @@
+# gitleaks configuration for ClaudeDriver (Constitution Principle I: no committed secrets).
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Phase 0 templates and clearly-labelled non-secret dev defaults"
+paths = [
+    '''\.env\.example$''',
+    '''backend/src/main/kotlin/com/claudedriver/backend/config/Config\.kt$''',
+]
+regexes = [
+    '''dev-insecure-session-key-change-me-\d+''',
+    '''dev-bootstrap''',
+]

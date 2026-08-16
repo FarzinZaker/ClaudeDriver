@@ -1,0 +1,337 @@
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #f0f2f5;
+  --border: #d9dde3;
+  --text: #1a1d21;
+  --muted: #5c6570;
+  --accent: #2563eb;
+  --accent-contrast: #ffffff;
+  --ok: #15803d;
+  --ok-bg: #dcfce7;
+  --warn: #b45309;
+  --warn-bg: #fef3c7;
+  --danger: #b91c1c;
+  --danger-bg: #fee2e2;
+  --radius: 10px;
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1116;
+    --surface: #171b21;
+    --surface-2: #1f242c;
+    --border: #2b313a;
+    --text: #e6e9ee;
+    --muted: #9aa4b1;
+    --accent: #3b82f6;
+    --accent-contrast: #0e1116;
+    --ok: #4ade80;
+    --ok-bg: #14351f;
+    --warn: #fbbf24;
+    --warn-bg: #3a2c0a;
+    --danger: #f87171;
+    --danger-bg: #3a1414;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.app {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 24px 20px 64px;
+}
+
+.app--centered {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+}
+
+h1 {
+  font-size: 1.5rem;
+  margin: 0;
+}
+
+h2 {
+  font-size: 1.05rem;
+  margin: 28px 0 12px;
+}
+
+.subtitle {
+  color: var(--muted);
+  margin: 4px 0 0;
+  font-size: 0.9rem;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+/* Health bar -------------------------------------------------------------- */
+.health {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  padding: 10px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+}
+
+.health-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.health-dot--open {
+  background: var(--ok);
+}
+.health-dot--connecting {
+  background: var(--warn);
+}
+.health-dot--closed {
+  background: var(--danger);
+}
+
+/* Machine grid ------------------------------------------------------------ */
+.machine-grid {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.machine-card {
+  padding: 14px 16px;
+}
+
+.machine-card__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.machine-card__name {
+  font-weight: 600;
+}
+
+.machine-card__meta {
+  margin: 12px 0 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+}
+
+.machine-card__meta div {
+  margin: 0;
+}
+
+.machine-card__meta dt {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.machine-card__meta dd {
+  margin: 2px 0 0;
+  font-size: 0.9rem;
+}
+
+.badge {
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-transform: capitalize;
+  border: 1px solid transparent;
+}
+.badge--enrolled {
+  color: var(--ok);
+  background: var(--ok-bg);
+}
+.badge--pending {
+  color: var(--warn);
+  background: var(--warn-bg);
+}
+.badge--revoked {
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+
+.conn {
+  font-weight: 600;
+}
+.conn--connected {
+  color: var(--ok);
+}
+.conn--disconnected {
+  color: var(--muted);
+}
+
+/* Inbox ------------------------------------------------------------------- */
+.inbox {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inbox__item {
+  display: grid;
+  grid-template-columns: 160px 220px 1fr;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.88rem;
+}
+
+.inbox__at {
+  color: var(--muted);
+}
+.inbox__machine {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .inbox__item {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}
+
+.empty {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* Buttons + forms --------------------------------------------------------- */
+.btn {
+  font: inherit;
+  padding: 9px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.btn--primary {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-color: var(--accent);
+  width: 100%;
+}
+.btn--ghost {
+  background: transparent;
+}
+
+/* Login ------------------------------------------------------------------- */
+.login-panel {
+  width: min(420px, 92vw);
+  padding: 28px;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin: 20px 0 16px;
+  background: var(--surface-2);
+  padding: 4px;
+  border-radius: 8px;
+}
+.tab {
+  flex: 1;
+  font: inherit;
+  padding: 8px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.tab--active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+
+.field {
+  display: block;
+  margin: 0 0 16px;
+}
+.field span {
+  display: block;
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.field input {
+  width: 100%;
+  font: inherit;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 0.88rem;
+  margin: 0 0 16px;
+}
+
+.error {
+  margin-top: 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: var(--danger);
+  background: var(--danger-bg);
+  font-size: 0.88rem;
+}

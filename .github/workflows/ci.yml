@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Build & test (JVM)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      # Docker is available on ubuntu-latest, so Testcontainers integration tests run here.
+      - name: Build & test
+        run: ./gradlew build --no-daemon --stacktrace
+
+  web:
+    name: Build & test (web)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run gitleaks
+        run: |
+          VERSION=8.21.2
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" | tar xz gitleaks
+          ./gitleaks detect --no-banner --redact --exit-code 1 --config .gitleaks.toml
+
+  constitution-check:
+    name: Constitution check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No committed .env and contract version present
+        run: |
+          set -e
+          if git ls-files | grep -E '(^|/)\.env$' ; then
+            echo "::error::A .env file is committed — secrets must never be in the repo (Principle I)."
+            exit 1
+          fi
+          grep -q 'PROTOCOL_VERSION' shared/src/main/kotlin/com/claudedriver/protocol/Protocol.kt
+          echo "Constitution checks passed."
+
+  infra:
+    name: Validate infra (terraform)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init -backend=false
+      - run: terraform fmt -check -recursive
+      - run: terraform validate
