@@ -2,25 +2,36 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
-import type { Envelope, SampleEventPayload, StatusResponse } from './types';
+import type {
+  AlertEventPayload,
+  AlertSummary,
+  Envelope,
+  SampleEventPayload,
+  SessionSummary,
+  SessionUpdatePayload,
+  StatusResponse,
+} from './types';
 import { MockWebSocket } from './test/mockWebSocket';
+
+const MACHINE_ALPHA = '11111111-1111-1111-1111-111111111111';
+const MACHINE_BETA = '22222222-2222-2222-2222-222222222222';
 
 const STATUS: StatusResponse = {
   server: { version: '0.1.0', time: '2026-08-16T12:00:00Z' },
   machines: [
     {
-      id: '11111111-1111-1111-1111-111111111111',
+      id: MACHINE_ALPHA,
       name: 'alpha-macbook',
       os: 'macos',
       status: 'enrolled',
       connection: {
         state: 'connected',
         since: '2026-08-16T11:59:00Z',
-        protocolVersion: '0.1.0',
+        protocolVersion: '0.2.0',
       },
     },
     {
-      id: '22222222-2222-2222-2222-222222222222',
+      id: MACHINE_BETA,
       name: 'beta-win',
       os: 'windows',
       status: 'pending',
@@ -29,6 +40,73 @@ const STATUS: StatusResponse = {
   ],
   recentSampleEvents: [],
 };
+
+const SESSION_RUNNING = 'aaaaaaaa-0000-0000-0000-000000000001';
+const SESSION_WAITING = 'aaaaaaaa-0000-0000-0000-000000000002';
+
+let SESSIONS: SessionSummary[];
+let ALERTS: AlertSummary[];
+
+function makeSessions(): SessionSummary[] {
+  return [
+    {
+      id: SESSION_RUNNING,
+      machineId: MACHINE_ALPHA,
+      machineName: 'alpha-macbook',
+      projectPath: '/Users/dev/proj-web',
+      state: 'running',
+      lastActivityAt: '2026-08-16T12:00:10Z',
+      processPresent: true,
+    },
+    {
+      id: SESSION_WAITING,
+      machineId: MACHINE_ALPHA,
+      machineName: 'alpha-macbook',
+      projectPath: '/Users/dev/proj-api',
+      state: 'waiting_for_operator',
+      lastActivityAt: '2026-08-16T12:00:20Z',
+      processPresent: true,
+    },
+  ];
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
+let fetchMock: ReturnType<typeof vi.fn>;
+
+function routeFetch(input: RequestInfo | URL): Response {
+  const url =
+    typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+  const path = url.replace(/^https?:\/\/[^/]+/, '');
+
+  if (path === '/status') return jsonResponse(STATUS);
+  if (path === '/sessions') return jsonResponse({ sessions: SESSIONS });
+  if (path === '/alerts') return jsonResponse({ alerts: ALERTS });
+  if (/^\/sessions\/[^/]+$/.test(path)) {
+    const id = decodeURIComponent(path.split('/')[2]);
+    const session = SESSIONS.find((s) => s.id === id) ?? SESSIONS[0];
+    return jsonResponse({
+      session,
+      recentEvents: [
+        {
+          kind: 'notification',
+          attention: 'needs_attention',
+          summary: 'permission: Bash `git push`',
+          at: '2026-08-16T12:00:20Z',
+        },
+      ],
+    });
+  }
+  if (/^\/alerts\/[^/]+\/ack$/.test(path)) {
+    return new Response(null, { status: 204 });
+  }
+  return jsonResponse({}, 404);
+}
 
 function renderApp() {
   const queryClient = new QueryClient({
@@ -42,17 +120,12 @@ function renderApp() {
 }
 
 beforeEach(() => {
+  SESSIONS = makeSessions();
+  ALERTS = [];
   MockWebSocket.reset();
   vi.stubGlobal('WebSocket', MockWebSocket as unknown as typeof WebSocket);
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async () =>
-      new Response(JSON.stringify(STATUS), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      }),
-    ),
-  );
+  fetchMock = vi.fn(async (input: RequestInfo | URL) => routeFetch(input));
+  vi.stubGlobal('fetch', fetchMock);
 });
 
 afterEach(() => {
@@ -60,7 +133,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('operator status page', () => {
+describe('operator dashboard', () => {
   it('renders machine cards from a mocked /status response', async () => {
     renderApp();
 
@@ -69,49 +142,143 @@ describe('operator status page', () => {
 
     expect(screen.getByText('alpha-macbook')).toBeInTheDocument();
     expect(screen.getByText('beta-win')).toBeInTheDocument();
-
-    // Server identity from the seed.
     expect(screen.getByText(/v0\.1\.0/)).toBeInTheDocument();
 
     // Connection-health indicator: one of two machines online.
     expect(screen.getByTestId('machines-online')).toHaveTextContent('1/2');
 
-    // Status badges reflect the contract statuses.
     const alpha = within(cards[0]);
     expect(alpha.getByText('enrolled')).toBeInTheDocument();
-    expect(alpha.getByText('connected')).toBeInTheDocument();
+  });
+
+  it('lists a machine’s sessions with correct state badges from /sessions', async () => {
+    renderApp();
+
+    const cards = await screen.findAllByTestId('machine-card');
+    const alpha = within(cards[0]);
+
+    // Two sessions render under the connected machine, with mapped badges.
+    await waitFor(() =>
+      expect(alpha.getAllByTestId('session-row')).toHaveLength(2),
+    );
+    expect(alpha.getByText('Running')).toBeInTheDocument();
+    expect(alpha.getByText('Waiting for you')).toBeInTheDocument();
+
+    // The offline machine has no sessions.
+    const beta = within(cards[1]);
+    expect(beta.getByTestId('no-sessions')).toBeInTheDocument();
+  });
+
+  it('renders an incoming alert_event (active) and acknowledging calls the ack endpoint', async () => {
+    renderApp();
+
+    await screen.findAllByTestId('machine-card');
+    // Wait for the alerts query to settle empty before we patch it live.
+    await screen.findByText(/No active alerts/i);
+    await waitFor(() => expect(MockWebSocket.last).toBeDefined());
+
+    const ws = MockWebSocket.last!;
+    act(() => ws.emitOpen());
+
+    const ALERT_ID = 'cccccccc-0000-0000-0000-000000000001';
+    const payload: AlertEventPayload = {
+      alertId: ALERT_ID,
+      sessionId: SESSION_WAITING,
+      machineId: MACHINE_ALPHA,
+      status: 'active',
+      urgency: 'high',
+      summary: 'permission: Bash `git push`',
+      raisedAt: '2026-08-16T12:00:21Z',
+      resolvedReason: null,
+    };
+    const envelope: Envelope<AlertEventPayload> = {
+      protocolVersion: '0.2.0',
+      type: 'alert_event',
+      seq: 3,
+      payload,
+    };
+    act(() => ws.emitMessage(envelope));
+
+    const item = await screen.findByTestId('alert-item');
+    expect(within(item).getByText('permission: Bash `git push`')).toBeInTheDocument();
+    expect(within(item).getByText('alpha-macbook')).toBeInTheDocument();
+
+    // Acknowledge → POST /alerts/{id}/ack.
+    act(() => within(item).getByTestId('alert-ack').click());
+
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([input, init]) => {
+          const url = typeof input === 'string' ? input : (input as URL).href ?? '';
+          return (
+            String(url).includes(`/alerts/${ALERT_ID}/ack`) &&
+            (init as RequestInit | undefined)?.method === 'POST'
+          );
+        }),
+      ).toBe(true),
+    );
+  });
+
+  it('applies a session_update moving a session to unknown_stale', async () => {
+    renderApp();
+
+    const cards = await screen.findAllByTestId('machine-card');
+    const alpha = within(cards[0]);
+    await waitFor(() => expect(alpha.getByText('Running')).toBeInTheDocument());
+    await waitFor(() => expect(MockWebSocket.last).toBeDefined());
+
+    const ws = MockWebSocket.last!;
+    act(() => ws.emitOpen());
+
+    const payload: SessionUpdatePayload = {
+      sessionId: SESSION_RUNNING,
+      machineId: MACHINE_ALPHA,
+      projectPath: '/Users/dev/proj-web',
+      state: 'unknown_stale',
+      lastActivityAt: '2026-08-16T12:05:00Z',
+      processPresent: false,
+    };
+    const envelope: Envelope<SessionUpdatePayload> = {
+      protocolVersion: '0.2.0',
+      type: 'session_update',
+      seq: 9,
+      payload,
+    };
+    act(() => ws.emitMessage(envelope));
+
+    await waitFor(() =>
+      expect(within(cards[0]).getByText('Unknown / stale')).toBeInTheDocument(),
+    );
+    // The previously-running badge is gone.
+    expect(within(cards[0]).queryByText('Running')).not.toBeInTheDocument();
   });
 
   it('renders an incoming sample_event envelope in the inbox', async () => {
     renderApp();
 
-    // Wait for seed + WS to be established.
     await screen.findAllByTestId('machine-card');
     await waitFor(() => expect(MockWebSocket.last).toBeDefined());
 
     const ws = MockWebSocket.last!;
     act(() => ws.emitOpen());
 
-    // Inbox starts empty.
     expect(screen.queryByTestId('inbox-item')).not.toBeInTheDocument();
 
     const payload: SampleEventPayload = {
-      machineId: '11111111-1111-1111-1111-111111111111',
+      machineId: MACHINE_ALPHA,
       message: 'hello from alpha',
       at: '2026-08-16T12:01:00Z',
     };
     const envelope: Envelope<SampleEventPayload> = {
-      protocolVersion: '0.1.0',
+      protocolVersion: '0.2.0',
       type: 'sample_event',
       seq: 7,
       payload,
     };
-
     act(() => ws.emitMessage(envelope));
 
     const item = await screen.findByTestId('inbox-item');
     expect(within(item).getByText('hello from alpha')).toBeInTheDocument();
-    // Live-patched into the seeded snapshot.
     expect(screen.getAllByTestId('inbox-item')).toHaveLength(1);
   });
 

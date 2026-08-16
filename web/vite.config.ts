@@ -14,6 +14,8 @@ export default defineConfig({
       '/api': { target: BACKEND, changeOrigin: true },
       '/auth': { target: BACKEND, changeOrigin: true },
       '/status': { target: BACKEND, changeOrigin: true },
+      '/sessions': { target: BACKEND, changeOrigin: true },
+      '/alerts': { target: BACKEND, changeOrigin: true },
       '/healthz': { target: BACKEND, changeOrigin: true },
       // Operator WebSocket stream.
       '/ws': { target: BACKEND, changeOrigin: true, ws: true },

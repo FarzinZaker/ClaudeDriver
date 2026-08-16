@@ -15,7 +15,7 @@ import kotlinx.serialization.json.encodeToJsonElement
  */
 
 /** Current contract version. Bump in the same change set as any wire change. */
-const val PROTOCOL_VERSION: String = "0.1.0"
+const val PROTOCOL_VERSION: String = "0.2.0"
 
 /** Message type discriminators carried in the envelope `type` field. */
 object MessageType {
@@ -25,12 +25,24 @@ object MessageType {
     const val PING = "ping"
     const val PONG = "pong"
     const val SAMPLE_EVENT = "sample_event"
+
+    // Phase 1 (monitoring) — agent → backend
+    const val PROCESS_SNAPSHOT = "process_snapshot"
+    const val ACTIVITY_EVENT = "activity_event"
+
+    // Phase 1 (monitoring) — backend → operator
+    const val SESSION_UPDATE = "session_update"
+    const val ALERT_EVENT = "alert_event"
 }
 
-/** Parsed semantic version with the Phase 0 compatibility rule: same MAJOR.MINOR. */
+/**
+ * Parsed semantic version. Compatibility rule: **same MAJOR** — minor bumps are additive (new
+ * message types), and unknown types are ignored by peers (forward-compatible), so a 0.1 agent and a
+ * 0.2 backend interoperate. A MAJOR difference is a negotiated break.
+ */
 data class ProtocolVersion(val major: Int, val minor: Int, val patch: Int) {
     fun isCompatibleWith(other: ProtocolVersion): Boolean =
-        major == other.major && minor == other.minor
+        major == other.major
 
     override fun toString(): String = "$major.$minor.$patch"
 
@@ -95,6 +107,54 @@ data class SampleEvent(
     val machineId: String,
     val message: String,
     val at: String,
+)
+
+// ---- Phase 1 payload types (contracts/protocol-additions.md) ---------------------------------
+
+@kotlinx.serialization.Serializable
+data class DetectedProcess(
+    val pid: Long,
+    val claudeSessionId: String? = null,
+    val projectPath: String? = null,
+    val startedAt: String,
+)
+
+@kotlinx.serialization.Serializable
+data class ProcessSnapshot(
+    val processes: List<DetectedProcess>,
+)
+
+@kotlinx.serialization.Serializable
+data class ActivityEvent(
+    val claudeSessionId: String,
+    val kind: String,
+    val notificationType: String? = null,
+    val projectPath: String? = null,
+    val summary: String,
+    val detail: String = "{}",
+    val at: String,
+)
+
+@kotlinx.serialization.Serializable
+data class SessionUpdate(
+    val sessionId: String,
+    val machineId: String,
+    val projectPath: String? = null,
+    val state: String,
+    val lastActivityAt: String,
+    val processPresent: Boolean,
+)
+
+@kotlinx.serialization.Serializable
+data class AlertEvent(
+    val alertId: String,
+    val sessionId: String,
+    val machineId: String,
+    val status: String,
+    val urgency: String,
+    val summary: String,
+    val raisedAt: String,
+    val resolvedReason: String? = null,
 )
 
 /** Encode/decode helpers so no consumer re-implements the framing. */

@@ -8,11 +8,11 @@ import org.junit.jupiter.api.Test
 class ProtocolTest {
 
     @Test
-    fun `same major-minor is compatible, different is not`() {
+    fun `same major is compatible (additive minors), different major is not`() {
         val current = ProtocolVersion.parse("0.1.0")
-        assertTrue(current.isCompatibleWith(ProtocolVersion.parse("0.1.9")))
-        assertFalse(current.isCompatibleWith(ProtocolVersion.parse("0.2.0")))
-        assertFalse(current.isCompatibleWith(ProtocolVersion.parse("1.1.0")))
+        assertTrue(current.isCompatibleWith(ProtocolVersion.parse("0.1.9"))) // patch
+        assertTrue(current.isCompatibleWith(ProtocolVersion.parse("0.2.0"))) // additive minor (Phase 1)
+        assertFalse(current.isCompatibleWith(ProtocolVersion.parse("1.1.0"))) // major break
     }
 
     @Test

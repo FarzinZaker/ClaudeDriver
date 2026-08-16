@@ -8,14 +8,20 @@ import com.claudedriver.backend.api.EnrollmentApprovedResponse
 import com.claudedriver.backend.api.ErrorResponse
 import com.claudedriver.backend.api.RegisterOptionsRequest
 import com.claudedriver.backend.api.WhoAmIResponse
+import com.claudedriver.backend.api.AlertsResponse
+import com.claudedriver.backend.api.SessionsResponse
+import com.claudedriver.backend.api.toDto
 import com.claudedriver.backend.audit.AuditAction
 import com.claudedriver.backend.connection.TrustService
 import com.claudedriver.backend.enrollment.EnrollmentException
+import com.claudedriver.backend.monitoring.AckResult
+import com.claudedriver.protocol.ActivityEvent
 import com.claudedriver.protocol.Codec
 import com.claudedriver.protocol.HelloAck
 import com.claudedriver.protocol.MessageType
 import com.claudedriver.protocol.PROTOCOL_VERSION
 import com.claudedriver.protocol.Pong
+import com.claudedriver.protocol.ProcessSnapshot
 import com.claudedriver.protocol.ProtocolVersion
 import com.claudedriver.protocol.SampleEvent
 import com.claudedriver.protocol.VersionMismatch
@@ -155,6 +161,36 @@ fun Application.configureRouting(deps: AppDeps) = routing {
         call.respond(HttpStatusCode.NoContent)
     }
 
+    // ---- Operator: monitoring (sessions & alerts) ----
+    get("/sessions") {
+        requireOperator(deps) ?: return@get
+        call.respond(SessionsResponse(deps.sessions.list().map { it.toDto() }))
+    }
+
+    get("/sessions/{id}") {
+        requireOperator(deps) ?: return@get
+        val detail = deps.sessions.detail(UUID.fromString(call.parameters["id"]))
+        if (detail == null) {
+            call.respond(HttpStatusCode.NotFound, ErrorResponse("not_found", "No such session"))
+        } else {
+            call.respond(detail.toDto())
+        }
+    }
+
+    get("/alerts") {
+        requireOperator(deps) ?: return@get
+        call.respond(AlertsResponse(deps.alerts.list().map { it.toDto() }))
+    }
+
+    post("/alerts/{id}/ack") {
+        requireOperator(deps) ?: return@post
+        when (deps.alerts.acknowledge(UUID.fromString(call.parameters["id"]))) {
+            AckResult.OK -> call.respond(HttpStatusCode.NoContent)
+            AckResult.NOT_FOUND -> call.respond(HttpStatusCode.NotFound, ErrorResponse("not_found", "No such alert"))
+            AckResult.NOT_ACTIVE -> call.respond(HttpStatusCode.Conflict, ErrorResponse("not_active", "Alert is not active"))
+        }
+    }
+
     // ---- Agent: enrollment & identity (mutual-TLS listener) ----
     post("/agent/enroll") {
         val req = call.receive<AgentEnrollRequest>()
@@ -227,7 +263,7 @@ private suspend fun DefaultWebSocketServerSession.handleAgentConnect(deps: AppDe
         val mismatch = Codec.envelope(
             MessageType.VERSION_MISMATCH,
             ++seq,
-            VersionMismatch(PROTOCOL_VERSION, "requires MAJOR.MINOR ${ProtocolVersion.CURRENT.major}.${ProtocolVersion.CURRENT.minor}"),
+            VersionMismatch(PROTOCOL_VERSION, "requires MAJOR ${ProtocolVersion.CURRENT.major}"),
         )
         send(Frame.Text(Codec.encode(mismatch)))
         deps.audit.append("machine:${identity.machineId}", AuditAction.CONNECTION_REFUSED, identity.machineId.toString(), """{"reason":"version_mismatch"}""")
@@ -257,6 +293,18 @@ private suspend fun DefaultWebSocketServerSession.handleAgentConnect(deps: AppDe
                     val sample = runCatching { Codec.decodePayload<SampleEvent>(env) }.getOrNull() ?: continue
                     deps.hub.recordAndSnapshotRecent(sample)
                     deps.hub.broadcast(Codec.encode(env)) // relay unchanged to operators
+                    deps.trust.updateLastSeq(connectionId, env.seq)
+                }
+
+                MessageType.PROCESS_SNAPSHOT -> {
+                    val snap = runCatching { Codec.decodePayload<ProcessSnapshot>(env) }.getOrNull() ?: continue
+                    deps.sessions.applyProcessSnapshot(identity.machineId, snap)
+                    deps.trust.updateLastSeq(connectionId, env.seq)
+                }
+
+                MessageType.ACTIVITY_EVENT -> {
+                    val activity = runCatching { Codec.decodePayload<ActivityEvent>(env) }.getOrNull() ?: continue
+                    deps.sessions.applyActivityEvent(identity.machineId, activity)
                     deps.trust.updateLastSeq(connectionId, env.seq)
                 }
             }

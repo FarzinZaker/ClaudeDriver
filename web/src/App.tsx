@@ -1,10 +1,30 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ApiError, STATUS_QUERY_KEY, fetchStatus } from './api';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  ackAlert,
+  ALERTS_QUERY_KEY,
+  ApiError,
+  fetchAlerts,
+  fetchSessionDetail,
+  fetchSessions,
+  fetchStatus,
+  SESSIONS_QUERY_KEY,
+  sessionDetailQueryKey,
+  STATUS_QUERY_KEY,
+} from './api';
 import { logout } from './auth/webauthn';
 import { LoginPanel } from './components/LoginPanel';
+import { SessionDetailModal } from './components/SessionDetail';
 import { StatusView } from './components/StatusView';
-import type { SampleEventPayload, SampleEventRecord, StatusResponse } from './types';
+import type {
+  AlertEventPayload,
+  AlertSummary,
+  SampleEventPayload,
+  SampleEventRecord,
+  SessionSummary,
+  SessionUpdatePayload,
+  StatusResponse,
+} from './types';
 import { OperatorWsClient, operatorWsUrl, type WsStatus } from './ws/client';
 
 const MAX_INBOX = 50;
@@ -26,9 +46,85 @@ function applySampleEvent(
   };
 }
 
+/**
+ * Patch a live `session_update` into the cached session list. The WS payload
+ * lacks `machineName` and uses `sessionId`; resolve the display name from the
+ * existing cache entry, falling back to a supplied resolver (the machine fleet).
+ */
+function applySessionUpdate(
+  prev: SessionSummary[] | undefined,
+  ev: SessionUpdatePayload,
+  resolveMachineName: (machineId: string) => string,
+): SessionSummary[] {
+  const list = prev ?? [];
+  const idx = list.findIndex((s) => s.id === ev.sessionId);
+  if (idx === -1) {
+    const created: SessionSummary = {
+      id: ev.sessionId,
+      machineId: ev.machineId,
+      machineName: resolveMachineName(ev.machineId),
+      projectPath: ev.projectPath,
+      state: ev.state,
+      lastActivityAt: ev.lastActivityAt,
+      processPresent: ev.processPresent,
+    };
+    return [...list, created];
+  }
+  const next = list.slice();
+  next[idx] = {
+    ...next[idx],
+    machineId: ev.machineId,
+    projectPath: ev.projectPath,
+    state: ev.state,
+    lastActivityAt: ev.lastActivityAt,
+    processPresent: ev.processPresent,
+  };
+  return next;
+}
+
+/**
+ * Patch a live `alert_event` into the cached inbox: upsert on active, update on
+ * acknowledged, remove on resolved. The payload lacks `machineName`.
+ */
+function applyAlertEvent(
+  prev: AlertSummary[] | undefined,
+  ev: AlertEventPayload,
+  resolveMachineName: (machineId: string) => string,
+): AlertSummary[] {
+  const list = prev ?? [];
+  if (ev.status === 'resolved') {
+    return list.filter((a) => a.id !== ev.alertId);
+  }
+  const idx = list.findIndex((a) => a.id === ev.alertId);
+  if (idx === -1) {
+    const created: AlertSummary = {
+      id: ev.alertId,
+      sessionId: ev.sessionId,
+      machineId: ev.machineId,
+      machineName: resolveMachineName(ev.machineId),
+      status: ev.status,
+      urgency: ev.urgency,
+      summary: ev.summary,
+      raisedAt: ev.raisedAt,
+      resolvedReason: ev.resolvedReason,
+    };
+    return [created, ...list];
+  }
+  const next = list.slice();
+  next[idx] = {
+    ...next[idx],
+    status: ev.status,
+    urgency: ev.urgency,
+    summary: ev.summary,
+    resolvedReason: ev.resolvedReason,
+  };
+  return next;
+}
+
 export default function App() {
   const queryClient = useQueryClient();
   const [wsStatus, setWsStatus] = useState<WsStatus>('closed');
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
   const statusQuery = useQuery({
     queryKey: STATUS_QUERY_KEY,
@@ -42,6 +138,45 @@ export default function App() {
 
   const authenticated = statusQuery.isSuccess;
 
+  const sessionsQuery = useQuery({
+    queryKey: SESSIONS_QUERY_KEY,
+    queryFn: fetchSessions,
+    enabled: authenticated,
+  });
+
+  const alertsQuery = useQuery({
+    queryKey: ALERTS_QUERY_KEY,
+    queryFn: fetchAlerts,
+    enabled: authenticated,
+  });
+
+  const sessionDetailQuery = useQuery({
+    queryKey: sessionDetailQueryKey(selectedSessionId ?? ''),
+    queryFn: () => fetchSessionDetail(selectedSessionId as string),
+    enabled: authenticated && selectedSessionId != null,
+  });
+
+  const ackMutation = useMutation({
+    mutationFn: (id: string) => ackAlert(id),
+    onSuccess: (_data, id) => {
+      // Optimistic local transition; the WS `alert_event` will confirm.
+      queryClient.setQueryData<AlertSummary[]>(ALERTS_QUERY_KEY, (prev) =>
+        (prev ?? []).map((a) =>
+          a.id === id ? { ...a, status: 'acknowledged' as const } : a,
+        ),
+      );
+    },
+  });
+
+  /** Resolve a machine's display name from the cached `/status` snapshot. */
+  const resolveMachineName = useCallback(
+    (machineId: string): string => {
+      const status = queryClient.getQueryData<StatusResponse>(STATUS_QUERY_KEY);
+      return status?.machines.find((m) => m.id === machineId)?.name ?? machineId;
+    },
+    [queryClient],
+  );
+
   const onSampleEvent = useCallback(
     (event: SampleEventPayload) => {
       queryClient.setQueryData<StatusResponse>(STATUS_QUERY_KEY, (prev) =>
@@ -49,6 +184,24 @@ export default function App() {
       );
     },
     [queryClient],
+  );
+
+  const onSessionUpdate = useCallback(
+    (event: SessionUpdatePayload) => {
+      queryClient.setQueryData<SessionSummary[]>(SESSIONS_QUERY_KEY, (prev) =>
+        applySessionUpdate(prev, event, resolveMachineName),
+      );
+    },
+    [queryClient, resolveMachineName],
+  );
+
+  const onAlertEvent = useCallback(
+    (event: AlertEventPayload) => {
+      queryClient.setQueryData<AlertSummary[]>(ALERTS_QUERY_KEY, (prev) =>
+        applyAlertEvent(prev, event, resolveMachineName),
+      );
+    },
+    [queryClient, resolveMachineName],
   );
 
   // Open the operator WS only while authenticated; tear down on logout/unmount.
@@ -60,10 +213,12 @@ export default function App() {
     const client = new OperatorWsClient(operatorWsUrl(), {
       onStatusChange: setWsStatus,
       onSampleEvent,
+      onSessionUpdate,
+      onAlertEvent,
     });
     client.connect();
     return () => client.close();
-  }, [authenticated, onSampleEvent]);
+  }, [authenticated, onSampleEvent, onSessionUpdate, onAlertEvent]);
 
   const handleAuthenticated = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: STATUS_QUERY_KEY });
@@ -73,7 +228,10 @@ export default function App() {
     try {
       await logout();
     } finally {
+      setSelectedSessionId(null);
       queryClient.removeQueries({ queryKey: STATUS_QUERY_KEY });
+      queryClient.removeQueries({ queryKey: SESSIONS_QUERY_KEY });
+      queryClient.removeQueries({ queryKey: ALERTS_QUERY_KEY });
       void queryClient.resetQueries({ queryKey: STATUS_QUERY_KEY });
     }
   }, [queryClient]);
@@ -105,10 +263,23 @@ export default function App() {
       <StatusView
         server={data.server}
         machines={data.machines}
+        sessions={sessionsQuery.data ?? []}
+        alerts={alertsQuery.data ?? []}
         recentSampleEvents={data.recentSampleEvents}
         wsStatus={wsStatus}
         onLogout={() => void handleLogout()}
+        onAckAlert={(id) => ackMutation.mutate(id)}
+        ackPendingId={ackMutation.isPending ? ackMutation.variables : null}
+        onOpenSession={setSelectedSessionId}
       />
+      {selectedSessionId != null && (
+        <SessionDetailModal
+          detail={sessionDetailQuery.data}
+          isLoading={sessionDetailQuery.isPending}
+          isError={sessionDetailQuery.isError}
+          onClose={() => setSelectedSessionId(null)}
+        />
+      )}
     </main>
   );
 }

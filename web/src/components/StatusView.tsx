@@ -1,13 +1,27 @@
-import type { Machine, SampleEventRecord, ServerInfo } from '../types';
+import type {
+  AlertSummary,
+  Machine,
+  SampleEventRecord,
+  ServerInfo,
+  SessionState,
+  SessionSummary,
+} from '../types';
 import type { WsStatus } from '../ws/client';
+import { AlertInbox } from './AlertInbox';
 import { ConnectionHealth } from './ConnectionHealth';
+import { SESSION_STATE_LABEL } from './SessionDetail';
 
 interface Props {
   server: ServerInfo;
   machines: Machine[];
+  sessions: SessionSummary[];
+  alerts: AlertSummary[];
   recentSampleEvents: SampleEventRecord[];
   wsStatus: WsStatus;
   onLogout?: () => void;
+  onAckAlert: (id: string) => void;
+  ackPendingId?: string | null;
+  onOpenSession: (sessionId: string) => void;
 }
 
 function formatTime(iso: string): string {
@@ -15,55 +29,130 @@ function formatTime(iso: string): string {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
 }
 
-function MachineCard({ machine }: { machine: Machine }) {
+/** Short relative-ish label for a session's last activity. */
+function projectLabel(path: string | null): string {
+  if (!path) return 'unknown project';
+  const parts = path.split('/').filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : path;
+}
+
+function SessionRow({
+  session,
+  onOpen,
+}: {
+  session: SessionSummary;
+  onOpen: (id: string) => void;
+}) {
+  const state: SessionState = session.state;
+  return (
+    <li className="session-row" data-testid="session-row" data-state={state}>
+      <button
+        type="button"
+        className="session-row__btn"
+        onClick={() => onOpen(session.id)}
+        title="Open session detail"
+      >
+        <span className="session-row__main">
+          <span className={`badge badge--state-${state}`} data-testid="session-badge">
+            {SESSION_STATE_LABEL[state]}
+          </span>
+          <span className="session-row__project mono" title={session.projectPath ?? ''}>
+            {projectLabel(session.projectPath)}
+          </span>
+        </span>
+        <span className="session-row__meta">
+          {!session.processPresent && (
+            <span className="session-row__flag" title="No live process backing this session">
+              no process
+            </span>
+          )}
+          <time className="session-row__at" dateTime={session.lastActivityAt}>
+            {formatTime(session.lastActivityAt)}
+          </time>
+        </span>
+      </button>
+    </li>
+  );
+}
+
+function MachineCard({
+  machine,
+  sessions,
+  onOpenSession,
+}: {
+  machine: Machine;
+  sessions: SessionSummary[];
+  onOpenSession: (id: string) => void;
+}) {
   const { connection } = machine;
+  const offline = connection.state !== 'connected';
   return (
     <li className="card machine-card" data-testid="machine-card">
       <div className="machine-card__head">
         <span className="machine-card__name">{machine.name}</span>
         <span className={`badge badge--${machine.status}`}>{machine.status}</span>
       </div>
-      <dl className="machine-card__meta">
-        <div>
-          <dt>OS</dt>
-          <dd>{machine.os}</dd>
-        </div>
-        <div>
-          <dt>Connection</dt>
-          <dd>
-            <span className={`conn conn--${connection.state}`}>{connection.state}</span>
-          </dd>
-        </div>
-        <div>
-          <dt>Since</dt>
-          <dd>{connection.since ? formatTime(connection.since) : '—'}</dd>
-        </div>
-        <div>
-          <dt>Protocol</dt>
-          <dd>{connection.protocolVersion ?? '—'}</dd>
-        </div>
-      </dl>
+      <div className="machine-card__sub">
+        <span className={`conn conn--${connection.state}`} data-testid="machine-conn">
+          {offline ? 'offline' : 'online'}
+        </span>
+        <span className="machine-card__os">{machine.os}</span>
+        <span className="machine-card__since">
+          {connection.since ? formatTime(connection.since) : 'never seen'}
+        </span>
+      </div>
+
+      <div className="machine-card__sessions">
+        {sessions.length === 0 ? (
+          <p className="empty empty--sm" data-testid="no-sessions">
+            No Claude Code sessions.
+          </p>
+        ) : (
+          <ul className="session-list">
+            {sessions.map((s) => (
+              <SessionRow key={s.id} session={s} onOpen={onOpenSession} />
+            ))}
+          </ul>
+        )}
+        {offline && sessions.length > 0 && (
+          <p className="machine-card__stale" data-testid="machine-stale">
+            Machine offline — sessions show last-known state.
+          </p>
+        )}
+      </div>
     </li>
   );
 }
 
 /**
- * The operator status page: server identity, machine fleet, and the live
- * sample-event inbox. Data is seeded from `GET /status` and patched live from
- * the operator WS by `App`.
+ * The operator dashboard: alert inbox, the machine fleet with live sessions,
+ * and the Phase 0 sample-event inbox. Data is seeded from REST and patched live
+ * from the operator WS by `App`.
  */
 export function StatusView({
   server,
   machines,
+  sessions,
+  alerts,
   recentSampleEvents,
   wsStatus,
   onLogout,
+  onAckAlert,
+  ackPendingId,
+  onOpenSession,
 }: Props) {
+  const sessionsByMachine = new Map<string, SessionSummary[]>();
+  for (const s of sessions) {
+    const list = sessionsByMachine.get(s.machineId) ?? [];
+    list.push(s);
+    sessionsByMachine.set(s.machineId, list);
+  }
+
   return (
     <div className="status-view">
       <header className="app-header">
         <div>
-          <h1>ClaudeDriver — Operator Status</h1>
+          <h1>ClaudeDriver — Operator Dashboard</h1>
           <p className="subtitle">
             Server <strong>v{server.version}</strong> · {formatTime(server.time)}
           </p>
@@ -77,14 +166,28 @@ export function StatusView({
 
       <ConnectionHealth wsStatus={wsStatus} machines={machines} />
 
+      <AlertInbox
+        alerts={alerts}
+        onAck={onAckAlert}
+        onOpenSession={onOpenSession}
+        ackPendingId={ackPendingId}
+      />
+
       <section aria-labelledby="machines-heading">
-        <h2 id="machines-heading">Machines ({machines.length})</h2>
+        <h2 id="machines-heading">
+          Machines ({machines.length}) · Sessions ({sessions.length})
+        </h2>
         {machines.length === 0 ? (
           <p className="empty">No machines enrolled yet.</p>
         ) : (
           <ul className="machine-grid">
             {machines.map((m) => (
-              <MachineCard key={m.id} machine={m} />
+              <MachineCard
+                key={m.id}
+                machine={m}
+                sessions={sessionsByMachine.get(m.id) ?? []}
+                onOpenSession={onOpenSession}
+              />
             ))}
           </ul>
         )}

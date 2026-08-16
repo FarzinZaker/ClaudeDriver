@@ -12,9 +12,13 @@
  */
 
 import {
+  isAlertEventEnvelope,
   isSampleEventEnvelope,
+  isSessionUpdateEnvelope,
+  type AlertEventPayload,
   type Envelope,
   type SampleEventPayload,
+  type SessionUpdatePayload,
 } from '../types';
 
 export type WsStatus = 'connecting' | 'open' | 'closed';
@@ -22,6 +26,10 @@ export type WsStatus = 'connecting' | 'open' | 'closed';
 export interface OperatorWsCallbacks {
   onStatusChange?: (status: WsStatus) => void;
   onSampleEvent?: (event: SampleEventPayload) => void;
+  /** Phase 1: live session state for the dashboard (`session_update`). */
+  onSessionUpdate?: (event: SessionUpdatePayload) => void;
+  /** Phase 1: alert raised / changed / resolved (`alert_event`). */
+  onAlertEvent?: (event: AlertEventPayload) => void;
   /** Any well-formed envelope, for callers that want the full stream. */
   onEnvelope?: (envelope: Envelope<unknown>) => void;
 }
@@ -65,6 +73,8 @@ export class OperatorWsClient {
       socketFactory: options.socketFactory ?? ((u) => new WebSocket(u)),
       onStatusChange: options.onStatusChange,
       onSampleEvent: options.onSampleEvent,
+      onSessionUpdate: options.onSessionUpdate,
+      onAlertEvent: options.onAlertEvent,
       onEnvelope: options.onEnvelope,
     };
   }
@@ -118,6 +128,10 @@ export class OperatorWsClient {
     // Unknown types on a compatible version are ignored (forward-compat, protocol.md).
     if (isSampleEventEnvelope(envelope)) {
       this.opts.onSampleEvent?.(envelope.payload);
+    } else if (isSessionUpdateEnvelope(envelope)) {
+      this.opts.onSessionUpdate?.(envelope.payload);
+    } else if (isAlertEventEnvelope(envelope)) {
+      this.opts.onAlertEvent?.(envelope.payload);
     }
   }
 

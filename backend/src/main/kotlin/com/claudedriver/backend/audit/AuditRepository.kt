@@ -12,6 +12,7 @@ import java.time.Instant
 enum class AuditAction {
     ENROLLMENT_APPROVED, ENROLLMENT_CONSUMED, MACHINE_REVOKED,
     CONNECTION_ACCEPTED, CONNECTION_REFUSED, AUTH_SUCCESS, AUTH_FAILURE,
+    ALERT_RAISED, ALERT_ACKNOWLEDGED, ALERT_RESOLVED,
 }
 
 /** Persists hash-chained audit events (Principle VI). */

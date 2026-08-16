@@ -8,8 +8,14 @@ import com.claudedriver.backend.ca.DeviceCa
 import com.claudedriver.backend.config.Config
 import com.claudedriver.backend.connection.TrustService
 import com.claudedriver.backend.enrollment.EnrollmentService
+import com.claudedriver.backend.monitoring.AlertService
+import com.claudedriver.backend.monitoring.AttentionClassifier
+import com.claudedriver.backend.monitoring.Publisher
+import com.claudedriver.backend.monitoring.SessionRegistry
 import com.claudedriver.backend.persistence.Db
 import com.claudedriver.backend.ws.OperatorHub
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
@@ -41,6 +47,8 @@ class AppDeps(
     val status: StatusService,
     val hub: OperatorHub,
     val operatorStore: OperatorStore,
+    val sessions: SessionRegistry,
+    val alerts: AlertService,
 ) {
     companion object {
         fun create(config: Config, database: Database): AppDeps {
@@ -50,6 +58,10 @@ class AppDeps(
             val ca = DeviceCa.generate()
             val operatorStore = OperatorStore(database)
             val hub = OperatorHub()
+            val publisher = Publisher(hub)
+            val classifier = AttentionClassifier()
+            val alerts = AlertService(database, audit, publisher)
+            val sessions = SessionRegistry(database, classifier, alerts, publisher)
             return AppDeps(
                 config = config,
                 database = database,
@@ -61,6 +73,8 @@ class AppDeps(
                 status = StatusService(database, hub),
                 hub = hub,
                 operatorStore = operatorStore,
+                sessions = sessions,
+                alerts = alerts,
             )
         }
     }
@@ -98,4 +112,12 @@ fun Application.module(deps: AppDeps) {
         }
     }
     configureRouting(deps)
+
+    // Staleness sweep: mark sessions unknown_stale when their machine goes offline or events stop.
+    launch {
+        while (true) {
+            delay(15.seconds)
+            runCatching { deps.sessions.sweepStale(thresholdSeconds = 30) }
+        }
+    }
 }
