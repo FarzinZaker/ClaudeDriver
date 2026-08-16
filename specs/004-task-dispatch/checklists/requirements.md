@@ -31,12 +31,11 @@
 
 ## Notes
 
-- Validation passed on first iteration.
-- Outcome-focused (deliver an instruction to a ready session, start/stop a run, at-most-once,
-  audited, authenticated channel). Mechanisms (channels vs `--resume`, process spawn/kill via the
-  agent) are deferred to `/speckit.plan`.
-- Three assumptions flagged for `/speckit.clarify` before planning: dispatch behavior when the session
-  is **not idle** (defaulted to queue-until-ready + undeliverable timeout), whether **starting a new
-  run** stays in Phase 3, and **stop** semantics (graceful → force).
+- Re-validated 2026-08-16 after `/speckit.clarify`: all items still pass (16/16); no checkbox changed.
+- Clarifications integrated: dispatch to a non-idle session = **queue-until-ready** (undeliverable if
+  never ready); **start-a-run is in Phase 3** and creates a **persistent** controllable session; and
+  **stop = graceful → force**.
+- Outcome-focused; mechanisms (channels vs `--resume`, process spawn/kill via the agent) remain
+  deferred to `/speckit.plan`.
 - Scope excludes answering arbitrary mid-turn questions (Phase 4) and per-operator scoping (multi-user).
 - Reuses the Phase 2 authenticated backend→agent command channel and the moot-on-stop approval rule.

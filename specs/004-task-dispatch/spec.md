@@ -22,9 +22,13 @@ mechanism — Phase 4).
 
 ### Session 2026-08-16
 
-_None yet. Three assumptions worth confirming in `/speckit.clarify` before planning: what "send a
-task" does when the session is **not idle**, whether **starting a new run** is in Phase 3 or
-deferred, and how **stop** behaves (graceful vs forced)._
+- Q: Dispatch to a session that is not idle? → A: **Queue until the session is ready, then deliver**;
+  report undeliverable if it never becomes ready. Never lost, never forced into a blocked prompt.
+- Q: Is "start a new run" in Phase 3? → A: **Yes** — built in Phase 3.
+- Q: What kind of session does "start a run" create? → A: A **persistent** Claude Code session that
+  stays alive so the operator can keep directing it (send follow-ups, approve, stop) — not a one-shot.
+- Q: Stop semantics? → A: **Graceful first** (ask the run to end cleanly), escalating to
+  force-terminate if it does not end within a short window.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -66,8 +70,8 @@ start; confirm a new session appears under that machine working in that project.
 **Acceptance Scenarios**:
 
 1. **Given** an enrolled, connected machine, **When** the operator starts a new run with a project and
-   an initial instruction, **Then** a new Claude Code session starts on that machine in that project
-   and appears in monitoring.
+   an initial instruction, **Then** a new **persistent** Claude Code session starts on that machine in
+   that project, appears in monitoring, and remains available for further instructions.
 2. **Given** an invalid project path or a machine that is offline, **When** the operator tries to
    start a run, **Then** the attempt is refused with a clear reason and nothing is started.
 
@@ -153,7 +157,8 @@ mid-action and confirm nothing partial or unsafe results.
 **Start a new run**
 - **FR-005**: The operator MUST be able to start a new Claude Code run on a chosen enrolled, connected
   machine, in a specified project path, with an initial instruction; the new session MUST appear in
-  monitoring.
+  monitoring. The new session MUST be **persistent and controllable** — able to receive further
+  dispatch, approvals, and stop — not a one-shot that exits after the first instruction.
 - **FR-006**: Starting a run MUST be refused with a clear reason when the machine is offline, the
   project path is invalid, or Claude Code is unavailable on that machine — and nothing MUST start.
 
@@ -209,8 +214,10 @@ mid-action and confirm nothing partial or unsafe results.
   injecting it between turns). Delivery to a session that is mid-turn or blocked on a prompt is queued
   until ready or reported undeliverable — it is not forced into a blocked prompt. Default:
   **queue-until-ready with an undeliverable timeout**.
-- **Starting a run**: the agent launches Claude Code on the machine in the given project with the
-  initial instruction. Requires Claude Code installed and the path to exist on that machine.
+- **Starting a run** (clarified: in Phase 3): the agent launches Claude Code on the machine in the
+  given project with the initial instruction, as a **persistent** session that stays alive for
+  further dispatch/approvals/stop (not a one-shot). Requires Claude Code installed and the path to
+  exist on that machine.
 - **Stop** (confirm in `/speckit.clarify`): default is a **graceful** stop of the session's run,
   escalating to force if needed; the target is identified via monitoring (process + session).
 - **Single operator** (from Phase 2): all machines/projects are in scope; per-machine/project scoping
