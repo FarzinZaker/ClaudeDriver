@@ -32,6 +32,9 @@ dependencies {
 
     implementation(libs.logback)
 
+    testImplementation(project(":agent"))
+    testImplementation(libs.ktor.client.core)
+    testImplementation(libs.ktor.client.cio)
     testImplementation(libs.ktor.server.test.host)
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.testcontainers.junit)

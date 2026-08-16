@@ -1,0 +1,115 @@
+package com.claudedriver.backend
+
+import com.claudedriver.agent.AgentClient
+import com.claudedriver.backend.config.Config
+import com.claudedriver.backend.persistence.AgentConnections
+import com.claudedriver.backend.persistence.Db
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.cio.CIO
+import io.ktor.client.request.header
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
+import io.ktor.server.engine.embeddedServer
+import io.ktor.server.netty.Netty
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import org.jetbrains.exposed.sql.selectAll
+import org.jetbrains.exposed.sql.transactions.transaction
+import org.junit.jupiter.api.Assumptions.assumeTrue
+import org.junit.jupiter.api.Test
+import java.io.File
+import java.nio.file.Files
+
+/**
+ * LIVE end-to-end smoke test: a real backend (Netty + Postgres, real V1+V2 migrations) and a real
+ * agent talking over real HTTP + WebSocket, driven by a simulated Claude Code hook posted to the
+ * agent's real loopback receiver. Proves: enroll → device-cert identity → connect → activity event →
+ * session state → alert raised → auto-resolved.
+ *
+ * Only runs when SMOKE_DB_URL points at a Postgres (otherwise skipped). Does NOT touch the user's
+ * ~/.claude settings (uses a temp settings file). Does NOT exercise WebAuthn or ALB mTLS (browser /
+ * AWS only) — enrollment is seeded via the service and the dev fingerprint header path is used.
+ */
+class SmokeTest {
+
+    @Test
+    fun `live end-to-end monitoring smoke`() = runBlocking {
+        val dbUrl = System.getenv("SMOKE_DB_URL")
+        assumeTrue(dbUrl != null, "Set SMOKE_DB_URL (and optionally SMOKE_DB_USER/PASS) to run the live smoke test")
+
+        val config = Config(
+            env = "dev", host = "127.0.0.1", port = 18080,
+            databaseUrl = dbUrl!!,
+            databaseUser = System.getenv("SMOKE_DB_USER") ?: "claudedriver",
+            databasePassword = System.getenv("SMOKE_DB_PASS") ?: "claudedriver",
+            sessionSigningKey = "smoke-session-signing-key-00000000000000000",
+            webAuthnRpId = "localhost", webAuthnRpName = "ClaudeDriver",
+            webAuthnOrigin = "http://localhost:5173", operatorBootstrapCode = "boot",
+        )
+        val db = Db.connect(config)
+        val deps = AppDeps.create(config, db.database)
+        val server = embeddedServer(Netty, host = config.host, port = config.port) { module(deps) }.start(wait = false)
+        val http = HttpClient(CIO)
+        try {
+            // 1) Seed an enrolled machine via the service (WebAuthn is browser-only; not under test).
+            val machineId = deps.enrollment.createMachine("smoke-mac", "macos")
+            val approved = deps.enrollment.approveEnrollment(machineId, "smoke-op")
+            println("• seeded machine $machineId + approved enrollment")
+
+            // 2) Real agent: enroll over HTTP, then connect over WSS (receiver + hooks → temp).
+            val agentDir = Files.createTempDirectory("smoke-agent").toFile()
+            val receiverPort = 18799
+            val agent = AgentClient(
+                serverBaseUrl = "http://127.0.0.1:${config.port}",
+                storageDir = agentDir,
+                hookReceiverPort = receiverPort,
+                settingsFile = File(agentDir, "claude-settings.json"),
+            )
+            agent.enroll(machineId.toString(), approved.code)
+            println("• agent enrolled (received device certificate)")
+            val agentJob = launch(Dispatchers.IO) { runCatching { agent.connectForever() } }
+
+            // 3) Wait for the mutually-identified WSS connection to be accepted.
+            waitUntil(15_000) {
+                transaction(db.database) { AgentConnections.selectAll().where { AgentConnections.state eq "connected" }.any() }
+            }
+            println("• agent connected over WSS and was recognized ✅")
+
+            val token = File(agentDir, "hook-token").readText().trim()
+            suspend fun hook(body: String) =
+                http.post("http://127.0.0.1:$receiverPort/hook") { header("Authorization", "Bearer $token"); setBody(body) }
+
+            // 4) Simulate Claude Code: session start, then a permission prompt (needs attention).
+            hook("""{"hook_event_name":"SessionStart","session_id":"smoke-1","cwd":"/tmp/proj"}""")
+            hook("""{"hook_event_name":"Notification","session_id":"smoke-1","cwd":"/tmp/proj","notification_type":"permission_prompt"}""")
+
+            waitUntil(15_000) { deps.alerts.list().any { it.status == "active" } }
+            val alert = deps.alerts.list().first { it.status == "active" }
+            check(deps.sessions.list().any { it.state == "waiting_for_operator" }) { "session should be waiting_for_operator" }
+            println("• attention ALERT raised ✅  urgency=${alert.urgency} summary='${alert.summary}'")
+
+            // 5) Simulate the operator answering (a subsequent tool event) → alert auto-resolves.
+            hook("""{"hook_event_name":"PostToolUse","session_id":"smoke-1","cwd":"/tmp/proj"}""")
+            waitUntil(15_000) { deps.alerts.list().none { it.status == "active" } }
+            println("• alert AUTO-RESOLVED after the wait ended ✅")
+
+            check(deps.alerts.list().any { it.status == "resolved" })
+            println("\nSMOKE PASS — session → alert → resolve verified over real HTTP/WSS + Postgres.")
+            agentJob.cancel()
+        } finally {
+            http.close()
+            server.stop(500, 1000)
+        }
+    }
+
+    private suspend fun waitUntil(timeoutMs: Long, condition: suspend () -> Boolean) {
+        val end = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < end) {
+            if (condition()) return
+            delay(200)
+        }
+        throw AssertionError("Condition not met within ${timeoutMs}ms")
+    }
+}

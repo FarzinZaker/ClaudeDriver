@@ -55,6 +55,7 @@ class AgentClient(
     private val storageDir: File,
     private val agentVersion: String = "0.2.0",
     private val hookReceiverPort: Int = 8765,
+    private val settingsFile: File = HookInstaller.defaultSettingsFile(),
 ) {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val http = HttpClient(CIO) { install(WebSockets) }
@@ -96,7 +97,7 @@ class AgentClient(
 
         // Monitoring setup: token, managed Claude Code hooks, loopback receiver, process monitor.
         val hookToken = loadOrCreateHookToken()
-        HookInstaller.installToFile(HookInstaller.defaultSettingsFile(), hookReceiverPort, hookTokenEnvVar)
+        HookInstaller.installToFile(settingsFile, hookReceiverPort, hookTokenEnvVar)
         println("Installed Claude Code monitoring hooks → 127.0.0.1:$hookReceiverPort")
         println("Export this in the environment Claude Code runs in: export $hookTokenEnvVar=$hookToken")
 
