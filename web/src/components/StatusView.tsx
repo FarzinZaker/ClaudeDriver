@@ -1,6 +1,7 @@
 import type {
   AlertSummary,
   ApprovalSummary,
+  ControlCommandSummary,
   Machine,
   SampleEventRecord,
   ServerInfo,
@@ -10,8 +11,10 @@ import type {
 import type { WsStatus } from '../ws/client';
 import { AlertInbox } from './AlertInbox';
 import { ApprovalsPanel } from './ApprovalsPanel';
+import { CommandsStrip } from './CommandsStrip';
 import { ConnectionHealth } from './ConnectionHealth';
 import { SESSION_STATE_LABEL } from './SessionDetail';
+import { StartRunPanel } from './StartRunPanel';
 
 interface Props {
   server: ServerInfo;
@@ -19,6 +22,7 @@ interface Props {
   sessions: SessionSummary[];
   alerts: AlertSummary[];
   approvals: ApprovalSummary[];
+  commands: ControlCommandSummary[];
   recentSampleEvents: SampleEventRecord[];
   wsStatus: WsStatus;
   onLogout?: () => void;
@@ -28,6 +32,8 @@ interface Props {
   decidePendingId?: string | null;
   approvalNotes?: Record<string, string>;
   onOpenSession: (sessionId: string) => void;
+  onStartRun: (machineId: string, projectPath: string, instruction: string) => void;
+  startRunPending?: boolean;
 }
 
 function formatTime(iso: string): string {
@@ -141,6 +147,7 @@ export function StatusView({
   sessions,
   alerts,
   approvals,
+  commands,
   recentSampleEvents,
   wsStatus,
   onLogout,
@@ -150,6 +157,8 @@ export function StatusView({
   decidePendingId,
   approvalNotes,
   onOpenSession,
+  onStartRun,
+  startRunPending,
 }: Props) {
   const sessionsByMachine = new Map<string, SessionSummary[]>();
   for (const s of sessions) {
@@ -175,6 +184,12 @@ export function StatusView({
       </header>
 
       <ConnectionHealth wsStatus={wsStatus} machines={machines} />
+
+      <StartRunPanel
+        machines={machines}
+        onStartRun={onStartRun}
+        startRunPending={startRunPending}
+      />
 
       <ApprovalsPanel
         approvals={approvals}
@@ -209,6 +224,8 @@ export function StatusView({
           </ul>
         )}
       </section>
+
+      <CommandsStrip commands={commands} />
 
       <section aria-labelledby="inbox-heading">
         <h2 id="inbox-heading">Sample event inbox ({recentSampleEvents.length})</h2>

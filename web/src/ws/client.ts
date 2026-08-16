@@ -14,10 +14,12 @@
 import {
   isAlertEventEnvelope,
   isApprovalEventEnvelope,
+  isControlEventEnvelope,
   isSampleEventEnvelope,
   isSessionUpdateEnvelope,
   type AlertEventPayload,
   type ApprovalEventPayload,
+  type ControlEventPayload,
   type Envelope,
   type SampleEventPayload,
   type SessionUpdatePayload,
@@ -34,6 +36,8 @@ export interface OperatorWsCallbacks {
   onAlertEvent?: (event: AlertEventPayload) => void;
   /** Phase 2: approval raised / decided / resolved (`approval_event`). */
   onApprovalEvent?: (event: ApprovalEventPayload) => void;
+  /** Phase 3: control command status change (`control_event`). */
+  onControlEvent?: (event: ControlEventPayload) => void;
   /** Any well-formed envelope, for callers that want the full stream. */
   onEnvelope?: (envelope: Envelope<unknown>) => void;
 }
@@ -80,6 +84,7 @@ export class OperatorWsClient {
       onSessionUpdate: options.onSessionUpdate,
       onAlertEvent: options.onAlertEvent,
       onApprovalEvent: options.onApprovalEvent,
+      onControlEvent: options.onControlEvent,
       onEnvelope: options.onEnvelope,
     };
   }
@@ -139,6 +144,8 @@ export class OperatorWsClient {
       this.opts.onAlertEvent?.(envelope.payload);
     } else if (isApprovalEventEnvelope(envelope)) {
       this.opts.onApprovalEvent?.(envelope.payload);
+    } else if (isControlEventEnvelope(envelope)) {
+      this.opts.onControlEvent?.(envelope.payload);
     }
   }
 

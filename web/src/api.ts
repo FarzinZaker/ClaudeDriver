@@ -6,6 +6,9 @@ import type {
   ApprovalStatus,
   ApprovalSummary,
   ApprovalsResponse,
+  CommandsResponse,
+  ControlCommandSummary,
+  ControlStatus,
   SessionDetail,
   SessionSummary,
   SessionsResponse,
@@ -20,6 +23,8 @@ export const SESSIONS_QUERY_KEY = ['sessions'] as const;
 export const ALERTS_QUERY_KEY = ['alerts'] as const;
 /** TanStack Query key for the seeded `/approvals` inbox. */
 export const APPROVALS_QUERY_KEY = ['approvals'] as const;
+/** TanStack Query key for the seeded `/commands` control activity strip. */
+export const COMMANDS_QUERY_KEY = ['commands'] as const;
 /** TanStack Query key factory for a single session's detail. */
 export const sessionDetailQueryKey = (id: string) =>
   ['session', id] as const;
@@ -148,4 +153,106 @@ export async function decideApproval(
   }
   const body = (await res.json()) as { status: 'approved' | 'denied' };
   return { outcome: 'applied', status: body.status };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3 — Remote control & task dispatch
+// ---------------------------------------------------------------------------
+
+/**
+ * Outcome of issuing a control command. On `202` the command is accepted and
+ * its `commandId` is tracked for live `control_event` updates. Expected refusals
+ * (`404` no such session, `409` machine offline) are surfaced as `rejected`
+ * rather than thrown, so the UI can show a reason without crashing; any other
+ * non-2xx status is thrown as an {@link ApiError}.
+ */
+export type ControlResult =
+  | { outcome: 'accepted'; commandId: string; status: ControlStatus }
+  | { outcome: 'rejected'; httpStatus: number; reason: string };
+
+const REJECTION_REASON: Record<number, string> = {
+  404: 'No such session.',
+  409: 'The machine is offline.',
+};
+
+/** Shared handling for the `202 { commandId, status }` control endpoints. */
+async function issueControl(
+  url: string,
+  body: unknown,
+  label: string,
+): Promise<ControlResult> {
+  const res = await fetch(url, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 404 || res.status === 409) {
+    return {
+      outcome: 'rejected',
+      httpStatus: res.status,
+      reason: REJECTION_REASON[res.status] ?? `Refused (${res.status}).`,
+    };
+  }
+  if (!res.ok) {
+    throw new ApiError(`${label} failed: ${res.status}`, res.status);
+  }
+  const parsed = (await res.json()) as { commandId: string; status: ControlStatus };
+  return { outcome: 'accepted', commandId: parsed.commandId, status: parsed.status };
+}
+
+/**
+ * Sends an instruction to a monitored session (`POST /sessions/{id}/dispatch`).
+ * → `202 { commandId, status: 'pending' }`; `404` if gone, `409` if offline.
+ */
+export async function dispatchTask(
+  sessionId: string,
+  instruction: string,
+): Promise<ControlResult> {
+  return issueControl(
+    `/sessions/${encodeURIComponent(sessionId)}/dispatch`,
+    { instruction },
+    `POST /sessions/${sessionId}/dispatch`,
+  );
+}
+
+/**
+ * Starts a new persistent Claude Code run (`POST /machines/{id}/start-run`).
+ * → `202 { commandId, status: 'pending' }`; `409` if the machine is offline.
+ */
+export async function startRun(
+  machineId: string,
+  projectPath: string,
+  instruction: string,
+): Promise<ControlResult> {
+  return issueControl(
+    `/machines/${encodeURIComponent(machineId)}/start-run`,
+    { projectPath, instruction },
+    `POST /machines/${machineId}/start-run`,
+  );
+}
+
+/**
+ * Stops a running session (`POST /sessions/{id}/stop`, graceful → force).
+ * → `202 { commandId, status: 'pending' }`; `404` if no such session.
+ */
+export async function stopSession(sessionId: string): Promise<ControlResult> {
+  return issueControl(
+    `/sessions/${encodeURIComponent(sessionId)}/stop`,
+    {},
+    `POST /sessions/${sessionId}/stop`,
+  );
+}
+
+/** Lists recent control commands + their status for the strip (`GET /commands`). */
+export async function fetchCommands(): Promise<ControlCommandSummary[]> {
+  const res = await fetch('/commands', {
+    credentials: 'include',
+    headers: { accept: 'application/json' },
+  });
+  if (!res.ok) {
+    throw new ApiError(`GET /commands failed: ${res.status}`, res.status);
+  }
+  const body = (await res.json()) as CommandsResponse;
+  return body.commands ?? [];
 }

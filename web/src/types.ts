@@ -10,7 +10,7 @@
  */
 
 /** Semver of the shared protocol contract this client speaks. */
-export const PROTOCOL_VERSION = '0.3.0';
+export const PROTOCOL_VERSION = '0.4.0';
 
 // ---------------------------------------------------------------------------
 // REST — GET /status
@@ -350,6 +350,98 @@ export function isApprovalEventEnvelope(
     typeof p.machineId === 'string' &&
     typeof p.tool === 'string' &&
     typeof p.summary === 'string' &&
+    typeof p.status === 'string'
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3 — Remote control & task dispatch (specs/004-task-dispatch)
+//   REST additions:  contracts/rest-api-additions.md
+//   Protocol adds:   contracts/protocol-additions.md
+// ---------------------------------------------------------------------------
+
+/**
+ * The three operator-issued control actions. `dispatch_task` sends an
+ * instruction to an existing monitored session, `start_run` launches a new
+ * persistent Claude Code run on a machine/project, and `stop_session` ends a
+ * running session.
+ */
+export type ControlCommandType = 'start_run' | 'dispatch_task' | 'stop_session';
+
+/**
+ * Lifecycle of a control command. `pending` is the initial accepted state; the
+ * agent then reports one of the terminal outcomes (`started` for a new run,
+ * `delivered` for a dispatched task, `done`, `stopped`, `undeliverable`, or
+ * `error`). Applied to the command idempotently — only if not already terminal.
+ */
+export type ControlStatus =
+  | 'pending'
+  | 'started'
+  | 'delivered'
+  | 'done'
+  | 'stopped'
+  | 'undeliverable'
+  | 'error';
+
+/**
+ * A control command + its status as returned by `GET /commands` (which seeds
+ * the activity strip; live updates arrive as `control_event`).
+ */
+export interface ControlCommandSummary {
+  id: string;
+  machineId: string;
+  machineName: string;
+  type: ControlCommandType;
+  /** Target Claude session for dispatch/stop, or null (e.g. start_run). */
+  claudeSessionId?: string | null;
+  /** The instruction text for dispatch/start_run, or null (e.g. stop). */
+  instruction?: string | null;
+  status: ControlStatus;
+  /** RFC3339 timestamp of when the command was created. */
+  createdAt: string;
+  /** Latest result/diagnostic message, or null. */
+  message?: string | null;
+}
+
+/** Response body of `GET /commands`. */
+export interface CommandsResponse {
+  commands: ControlCommandSummary[];
+}
+
+// --- WebSocket: control_event --------------------------------------------
+
+/**
+ * `control_event` payload — a command's status for the live UI. Note the wire
+ * uses `commandId` (not `id`), `commandType` (not `type`), and `at` (not
+ * `createdAt`); it carries `machineName` directly (like `approval_event`).
+ */
+export interface ControlEventPayload {
+  commandId: string;
+  machineId: string;
+  machineName: string;
+  commandType: ControlCommandType;
+  status: ControlStatus;
+  claudeSessionId?: string | null;
+  /** RFC3339 timestamp of the status change. */
+  at: string;
+  message?: string | null;
+}
+
+export type ControlEventEnvelope = Envelope<ControlEventPayload> & {
+  type: 'control_event';
+};
+
+/** Narrowing guard for an incoming `control_event` envelope. */
+export function isControlEventEnvelope(
+  env: Envelope<unknown>,
+): env is ControlEventEnvelope {
+  if (env.type !== 'control_event') return false;
+  const p = env.payload as Partial<ControlEventPayload> | null;
+  return (
+    !!p &&
+    typeof p.commandId === 'string' &&
+    typeof p.machineId === 'string' &&
+    typeof p.commandType === 'string' &&
     typeof p.status === 'string'
   );
 }

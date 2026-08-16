@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 import type {
@@ -7,6 +7,8 @@ import type {
   AlertSummary,
   ApprovalEventPayload,
   ApprovalSummary,
+  ControlCommandSummary,
+  ControlEventPayload,
   Envelope,
   SampleEventPayload,
   SessionSummary,
@@ -47,10 +49,12 @@ const SESSION_RUNNING = 'aaaaaaaa-0000-0000-0000-000000000001';
 const SESSION_WAITING = 'aaaaaaaa-0000-0000-0000-000000000002';
 
 const APPROVAL_ID = 'dddddddd-0000-0000-0000-000000000001';
+const COMMAND_ID = 'eeeeeeee-0000-0000-0000-000000000001';
 
 let SESSIONS: SessionSummary[];
 let ALERTS: AlertSummary[];
 let APPROVALS: ApprovalSummary[];
+let COMMANDS: ControlCommandSummary[];
 
 function makeApprovals(): ApprovalSummary[] {
   return [
@@ -65,6 +69,22 @@ function makeApprovals(): ApprovalSummary[] {
       createdAt: '2026-08-16T12:00:30Z',
       decidedBy: null,
       reason: null,
+    },
+  ];
+}
+
+function makeCommands(): ControlCommandSummary[] {
+  return [
+    {
+      id: COMMAND_ID,
+      machineId: MACHINE_ALPHA,
+      machineName: 'alpha-macbook',
+      type: 'dispatch_task',
+      claudeSessionId: SESSION_RUNNING,
+      instruction: 'run the smoke tests',
+      status: 'pending',
+      createdAt: '2026-08-16T12:00:35Z',
+      message: null,
     },
   ];
 }
@@ -110,6 +130,16 @@ function routeFetch(input: RequestInfo | URL): Response {
   if (path === '/sessions') return jsonResponse({ sessions: SESSIONS });
   if (path === '/alerts') return jsonResponse({ alerts: ALERTS });
   if (path === '/approvals') return jsonResponse({ approvals: APPROVALS });
+  if (path === '/commands') return jsonResponse({ commands: COMMANDS });
+  if (/^\/sessions\/[^/]+\/dispatch$/.test(path)) {
+    return jsonResponse({ commandId: 'cmd-dispatch-1', status: 'pending' }, 202);
+  }
+  if (/^\/sessions\/[^/]+\/stop$/.test(path)) {
+    return jsonResponse({ commandId: 'cmd-stop-1', status: 'pending' }, 202);
+  }
+  if (/^\/machines\/[^/]+\/start-run$/.test(path)) {
+    return jsonResponse({ commandId: 'cmd-start-1', status: 'pending' }, 202);
+  }
   if (/^\/sessions\/[^/]+$/.test(path)) {
     const id = decodeURIComponent(path.split('/')[2]);
     const session = SESSIONS.find((s) => s.id === id) ?? SESSIONS[0];
@@ -149,6 +179,7 @@ beforeEach(() => {
   SESSIONS = makeSessions();
   ALERTS = [];
   APPROVALS = [];
+  COMMANDS = [];
   MockWebSocket.reset();
   vi.stubGlobal('WebSocket', MockWebSocket as unknown as typeof WebSocket);
   fetchMock = vi.fn(async (input: RequestInfo | URL) => routeFetch(input));
@@ -377,6 +408,98 @@ describe('operator dashboard', () => {
     // The pending heading drops to zero; it now shows resolved for context.
     expect(screen.getByText(/Approvals \(0\)/)).toBeInTheDocument();
     expect(screen.getByTestId('approval-resolved-item')).toBeInTheDocument();
+  });
+
+  it('typing an instruction and clicking Send task dispatches it to the session', async () => {
+    renderApp();
+
+    const cards = await screen.findAllByTestId('machine-card');
+    const rows = within(cards[0]).getAllByTestId('session-row');
+    // Open the running session's detail modal (SESSIONS[0] === SESSION_RUNNING).
+    act(() => within(rows[0]).getByRole('button').click());
+
+    const input = await screen.findByTestId('dispatch-input');
+    act(() => {
+      fireEvent.change(input, { target: { value: 'run the smoke tests' } });
+    });
+    act(() => screen.getByTestId('dispatch-send').click());
+
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([reqInput, init]) => {
+          const url =
+            typeof reqInput === 'string' ? reqInput : (reqInput as URL).href ?? '';
+          return (
+            String(url).includes(`/sessions/${SESSION_RUNNING}/dispatch`) &&
+            (init as RequestInit | undefined)?.method === 'POST' &&
+            String((init as RequestInit | undefined)?.body ?? '').includes(
+              'run the smoke tests',
+            )
+          );
+        }),
+      ).toBe(true),
+    );
+  });
+
+  it('applies an incoming control_event to a command in the strip', async () => {
+    COMMANDS = makeCommands();
+    renderApp();
+
+    const item = await screen.findByTestId('command-item');
+    expect(within(item).getByTestId('control-status')).toHaveTextContent('Pending');
+    await waitFor(() => expect(MockWebSocket.last).toBeDefined());
+
+    const ws = MockWebSocket.last!;
+    act(() => ws.emitOpen());
+
+    const payload: ControlEventPayload = {
+      commandId: COMMAND_ID,
+      machineId: MACHINE_ALPHA,
+      machineName: 'alpha-macbook',
+      commandType: 'dispatch_task',
+      status: 'delivered',
+      claudeSessionId: SESSION_RUNNING,
+      at: '2026-08-16T12:00:45Z',
+      message: 'delivered to session',
+    };
+    const envelope: Envelope<ControlEventPayload> = {
+      protocolVersion: '0.4.0',
+      type: 'control_event',
+      seq: 11,
+      payload,
+    };
+    act(() => ws.emitMessage(envelope));
+
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('command-item')).getByTestId('control-status'),
+      ).toHaveTextContent('Delivered'),
+    );
+  });
+
+  it('clicking Stop session calls the stop endpoint after confirmation', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderApp();
+
+    const cards = await screen.findAllByTestId('machine-card');
+    const rows = within(cards[0]).getAllByTestId('session-row');
+    act(() => within(rows[0]).getByRole('button').click());
+
+    const stopBtn = await screen.findByTestId('stop-session');
+    act(() => stopBtn.click());
+
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([reqInput, init]) => {
+          const url =
+            typeof reqInput === 'string' ? reqInput : (reqInput as URL).href ?? '';
+          return (
+            String(url).includes(`/sessions/${SESSION_RUNNING}/stop`) &&
+            (init as RequestInit | undefined)?.method === 'POST'
+          );
+        }),
+      ).toBe(true),
+    );
   });
 
   it('shows connection stream status once the socket opens', async () => {

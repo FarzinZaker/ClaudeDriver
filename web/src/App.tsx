@@ -5,15 +5,21 @@ import {
   ALERTS_QUERY_KEY,
   ApiError,
   APPROVALS_QUERY_KEY,
+  COMMANDS_QUERY_KEY,
   decideApproval,
+  dispatchTask,
   fetchAlerts,
   fetchApprovals,
+  fetchCommands,
   fetchSessionDetail,
   fetchSessions,
   fetchStatus,
   SESSIONS_QUERY_KEY,
   sessionDetailQueryKey,
+  startRun,
   STATUS_QUERY_KEY,
+  stopSession,
+  type ControlResult,
 } from './api';
 import { logout } from './auth/webauthn';
 import { LoginPanel } from './components/LoginPanel';
@@ -24,6 +30,9 @@ import type {
   AlertSummary,
   ApprovalEventPayload,
   ApprovalSummary,
+  ControlCommandSummary,
+  ControlCommandType,
+  ControlEventPayload,
   SampleEventPayload,
   SampleEventRecord,
   SessionSummary,
@@ -164,6 +173,55 @@ function applyApprovalEvent(
   return next;
 }
 
+const MAX_COMMANDS = 50;
+
+/**
+ * Patch a live `control_event` into the cached command strip, correlated by
+ * `commandId`. An unseen command is prepended (it may pre-date our seed or come
+ * from another surface); a known one is updated in place. The status is applied
+ * as-is — the backend already enforces at-most-once/idempotent transitions.
+ */
+function applyControlEvent(
+  prev: ControlCommandSummary[] | undefined,
+  ev: ControlEventPayload,
+): ControlCommandSummary[] {
+  const list = prev ?? [];
+  const idx = list.findIndex((c) => c.id === ev.commandId);
+  if (idx === -1) {
+    const created: ControlCommandSummary = {
+      id: ev.commandId,
+      machineId: ev.machineId,
+      machineName: ev.machineName,
+      type: ev.commandType,
+      claudeSessionId: ev.claudeSessionId ?? null,
+      instruction: null,
+      status: ev.status,
+      createdAt: ev.at,
+      message: ev.message ?? null,
+    };
+    return [created, ...list].slice(0, MAX_COMMANDS);
+  }
+  const next = list.slice();
+  next[idx] = {
+    ...next[idx],
+    status: ev.status,
+    machineName: ev.machineName || next[idx].machineName,
+    claudeSessionId: ev.claudeSessionId ?? next[idx].claudeSessionId ?? null,
+    message: ev.message ?? next[idx].message ?? null,
+  };
+  return next;
+}
+
+/** Optimistically seed a just-accepted command into the strip cache. */
+function upsertCommand(
+  prev: ControlCommandSummary[] | undefined,
+  command: ControlCommandSummary,
+): ControlCommandSummary[] {
+  const list = prev ?? [];
+  if (list.some((c) => c.id === command.id)) return list;
+  return [command, ...list].slice(0, MAX_COMMANDS);
+}
+
 export default function App() {
   const queryClient = useQueryClient();
   const [wsStatus, setWsStatus] = useState<WsStatus>('closed');
@@ -197,6 +255,12 @@ export default function App() {
   const approvalsQuery = useQuery({
     queryKey: APPROVALS_QUERY_KEY,
     queryFn: fetchApprovals,
+    enabled: authenticated,
+  });
+
+  const commandsQuery = useQuery({
+    queryKey: COMMANDS_QUERY_KEY,
+    queryFn: fetchCommands,
     enabled: authenticated,
   });
 
@@ -241,6 +305,101 @@ export default function App() {
           a.id === id ? { ...a, status, decidedBy: 'operator' } : a,
         ),
       );
+    },
+  });
+
+  /**
+   * Record a just-accepted control command optimistically so it appears in the
+   * strip immediately with `pending` status; the `control_event` for its
+   * `commandId` then drives it to a terminal status.
+   */
+  const seedAcceptedCommand = useCallback(
+    (
+      result: ControlResult,
+      base: {
+        type: ControlCommandType;
+        machineId: string;
+        machineName: string;
+        claudeSessionId?: string | null;
+        instruction?: string | null;
+      },
+    ) => {
+      if (result.outcome !== 'accepted') return;
+      const command: ControlCommandSummary = {
+        id: result.commandId,
+        machineId: base.machineId,
+        machineName: base.machineName,
+        type: base.type,
+        claudeSessionId: base.claudeSessionId ?? null,
+        instruction: base.instruction ?? null,
+        status: result.status,
+        createdAt: new Date().toISOString(),
+        message: null,
+      };
+      queryClient.setQueryData<ControlCommandSummary[]>(COMMANDS_QUERY_KEY, (prev) =>
+        upsertCommand(prev, command),
+      );
+    },
+    [queryClient],
+  );
+
+  /** Look up a monitored session's summary from the sessions cache. */
+  const findSession = useCallback(
+    (sessionId: string): SessionSummary | undefined =>
+      queryClient
+        .getQueryData<SessionSummary[]>(SESSIONS_QUERY_KEY)
+        ?.find((s) => s.id === sessionId),
+    [queryClient],
+  );
+
+  const dispatchMutation = useMutation({
+    mutationFn: ({ sessionId, instruction }: { sessionId: string; instruction: string }) =>
+      dispatchTask(sessionId, instruction),
+    onSuccess: (result, { sessionId, instruction }) => {
+      const session = findSession(sessionId);
+      seedAcceptedCommand(result, {
+        type: 'dispatch_task',
+        machineId: session?.machineId ?? '',
+        machineName: session?.machineName ?? 'unknown machine',
+        claudeSessionId: sessionId,
+        instruction,
+      });
+    },
+  });
+
+  const stopMutation = useMutation({
+    mutationFn: ({ sessionId }: { sessionId: string }) => stopSession(sessionId),
+    onSuccess: (result, { sessionId }) => {
+      const session = findSession(sessionId);
+      seedAcceptedCommand(result, {
+        type: 'stop_session',
+        machineId: session?.machineId ?? '',
+        machineName: session?.machineName ?? 'unknown machine',
+        claudeSessionId: sessionId,
+      });
+    },
+  });
+
+  const startRunMutation = useMutation({
+    mutationFn: ({
+      machineId,
+      projectPath,
+      instruction,
+    }: {
+      machineId: string;
+      projectPath: string;
+      instruction: string;
+    }) => startRun(machineId, projectPath, instruction),
+    onSuccess: (result, { machineId, instruction }) => {
+      const status = queryClient.getQueryData<StatusResponse>(STATUS_QUERY_KEY);
+      const machineName =
+        status?.machines.find((m) => m.id === machineId)?.name ?? machineId;
+      seedAcceptedCommand(result, {
+        type: 'start_run',
+        machineId,
+        machineName,
+        instruction,
+      });
     },
   });
 
@@ -289,6 +448,15 @@ export default function App() {
     [queryClient],
   );
 
+  const onControlEvent = useCallback(
+    (event: ControlEventPayload) => {
+      queryClient.setQueryData<ControlCommandSummary[]>(COMMANDS_QUERY_KEY, (prev) =>
+        applyControlEvent(prev, event),
+      );
+    },
+    [queryClient],
+  );
+
   // Open the operator WS only while authenticated; tear down on logout/unmount.
   useEffect(() => {
     if (!authenticated) {
@@ -301,10 +469,18 @@ export default function App() {
       onSessionUpdate,
       onAlertEvent,
       onApprovalEvent,
+      onControlEvent,
     });
     client.connect();
     return () => client.close();
-  }, [authenticated, onSampleEvent, onSessionUpdate, onAlertEvent, onApprovalEvent]);
+  }, [
+    authenticated,
+    onSampleEvent,
+    onSessionUpdate,
+    onAlertEvent,
+    onApprovalEvent,
+    onControlEvent,
+  ]);
 
   const handleAuthenticated = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: STATUS_QUERY_KEY });
@@ -320,6 +496,7 @@ export default function App() {
       queryClient.removeQueries({ queryKey: SESSIONS_QUERY_KEY });
       queryClient.removeQueries({ queryKey: ALERTS_QUERY_KEY });
       queryClient.removeQueries({ queryKey: APPROVALS_QUERY_KEY });
+      queryClient.removeQueries({ queryKey: COMMANDS_QUERY_KEY });
       void queryClient.resetQueries({ queryKey: STATUS_QUERY_KEY });
     }
   }, [queryClient]);
@@ -346,6 +523,15 @@ export default function App() {
   }
 
   const data = statusQuery.data;
+  const commands = commandsQuery.data ?? [];
+  // Latest control command targeting the open session (correlated by claudeSessionId).
+  const latestCommandForSelected =
+    selectedSessionId == null
+      ? undefined
+      : commands
+          .filter((c) => c.claudeSessionId === selectedSessionId)
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+
   return (
     <main className="app">
       <StatusView
@@ -354,6 +540,7 @@ export default function App() {
         sessions={sessionsQuery.data ?? []}
         alerts={alertsQuery.data ?? []}
         approvals={approvalsQuery.data ?? []}
+        commands={commands}
         recentSampleEvents={data.recentSampleEvents}
         wsStatus={wsStatus}
         onLogout={() => void handleLogout()}
@@ -363,6 +550,10 @@ export default function App() {
         decidePendingId={decideMutation.isPending ? decideMutation.variables.id : null}
         approvalNotes={approvalNotes}
         onOpenSession={setSelectedSessionId}
+        onStartRun={(machineId, projectPath, instruction) =>
+          startRunMutation.mutate({ machineId, projectPath, instruction })
+        }
+        startRunPending={startRunMutation.isPending}
       />
       {selectedSessionId != null && (
         <SessionDetailModal
@@ -370,6 +561,19 @@ export default function App() {
           isLoading={sessionDetailQuery.isPending}
           isError={sessionDetailQuery.isError}
           onClose={() => setSelectedSessionId(null)}
+          onDispatch={(sessionId, instruction) =>
+            dispatchMutation.mutate({ sessionId, instruction })
+          }
+          onStop={(sessionId) => stopMutation.mutate({ sessionId })}
+          dispatchPending={
+            dispatchMutation.isPending &&
+            dispatchMutation.variables?.sessionId === selectedSessionId
+          }
+          stopPending={
+            stopMutation.isPending &&
+            stopMutation.variables?.sessionId === selectedSessionId
+          }
+          latestCommand={latestCommandForSelected}
         />
       )}
     </main>
