@@ -89,12 +89,17 @@ data "aws_iam_policy_document" "task_runtime" {
   }
 
   # Read the self-contained per-OS agent runtimes the backend wraps into per-machine installers.
+  # ListBucket (on the bucket) is required alongside GetObject (on its objects): without it S3
+  # returns 403-citing-ListBucket instead of serving the object.
   dynamic "statement" {
     for_each = var.agent_runtimes_bucket == "" ? [] : [1]
     content {
-      sid       = "ReadAgentRuntimes"
-      actions   = ["s3:GetObject"]
-      resources = ["arn:aws:s3:::${var.agent_runtimes_bucket}/*"]
+      sid     = "ReadAgentRuntimes"
+      actions = ["s3:GetObject", "s3:ListBucket"]
+      resources = [
+        "arn:aws:s3:::${var.agent_runtimes_bucket}",
+        "arn:aws:s3:::${var.agent_runtimes_bucket}/*",
+      ]
     }
   }
 }

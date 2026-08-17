@@ -54,6 +54,7 @@ import java.util.concurrent.atomic.AtomicLong
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
+import io.ktor.server.application.log
 import io.ktor.server.request.header
 import io.ktor.server.request.path
 import io.ktor.server.request.receive
@@ -231,6 +232,18 @@ fun Application.configureRouting(deps: AppDeps) = routing {
         val target = deps.installer.targetFor(os)
             ?: return@get call.respond(HttpStatusCode.BadRequest, ErrorResponse("bad_os", "Unsupported OS: $os"))
 
+        // Fetch the runtime BEFORE committing the response, so an S3/permission failure returns a
+        // real error instead of a truncated (empty) zip. Also avoids minting a code we can't fulfil.
+        val runtime = try {
+            deps.installer.openRuntime(os)
+        } catch (e: Exception) {
+            call.application.log.error("installer: failed to fetch agent runtime for os=$os", e)
+            return@get call.respond(
+                HttpStatusCode.BadGateway,
+                ErrorResponse("runtime_unavailable", "Agent runtime could not be fetched"),
+            )
+        }
+
         val approved = deps.enrollment.approveEnrollment(id, op.handle)
         val configJson = buildJsonObject {
             put("backendUrl", deps.config.agentPublicUrl)
@@ -246,7 +259,7 @@ fun Application.configureRouting(deps: AppDeps) = routing {
                 .toString(),
         )
         call.respondOutputStream(ContentType.Application.Zip) {
-            deps.installer.writeInstaller(os, configJson, this)
+            runtime.use { deps.installer.writeInstaller(os, it, configJson, this) }
         }
     }
 

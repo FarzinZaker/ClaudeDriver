@@ -4,6 +4,7 @@ import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.s3.S3Client
 import software.amazon.awssdk.services.s3.model.GetObjectRequest
+import java.io.InputStream
 import java.io.OutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
@@ -41,31 +42,39 @@ class InstallerService(
     val configured: Boolean get() = !runtimesBucket.isNullOrBlank()
 
     /**
-     * Stream a per-machine installer zip to [out]: the OS runtime archive copied through verbatim,
-     * plus `agent.config`, the install script, and a short README.
+     * Open the OS runtime archive stream from S3. Throws (S3Exception, etc.) if it cannot be
+     * fetched — call this BEFORE committing the HTTP response so failures surface as a real error
+     * status rather than a truncated/empty download.
      */
-    fun writeInstaller(os: String, agentConfigJson: String, out: OutputStream) {
+    fun openRuntime(os: String): InputStream {
         val bucket = requireNotNull(runtimesBucket) { "Agent runtimes bucket is not configured" }
         val target = requireNotNull(targetFor(os)) { "Unsupported OS: $os" }
+        return s3.getObject(GetObjectRequest.builder().bucket(bucket).key(target.runtimeKey).build())
+    }
 
+    /**
+     * Stream a per-machine installer zip to [out]: the already-opened runtime archive copied through
+     * verbatim, plus `agent.config`, the install script, and a short README. [runtimeIn] comes from
+     * [openRuntime]; the caller owns closing it.
+     */
+    fun writeInstaller(os: String, runtimeIn: InputStream, agentConfigJson: String, out: OutputStream) {
+        val target = requireNotNull(targetFor(os)) { "Unsupported OS: $os" }
         ZipOutputStream(out).use { zos ->
             // 1) Copy the self-contained runtime archive entry-by-entry (streamed).
-            s3.getObject(GetObjectRequest.builder().bucket(bucket).key(target.runtimeKey).build()).use { s3In ->
-                ZipInputStream(s3In).use { zin ->
-                    val buf = ByteArray(64 * 1024)
-                    var entry = zin.nextEntry
-                    while (entry != null) {
-                        if (!entry.isDirectory) {
-                            zos.putNextEntry(ZipEntry(entry.name))
-                            var n = zin.read(buf)
-                            while (n >= 0) {
-                                zos.write(buf, 0, n)
-                                n = zin.read(buf)
-                            }
-                            zos.closeEntry()
+            ZipInputStream(runtimeIn).use { zin ->
+                val buf = ByteArray(64 * 1024)
+                var entry = zin.nextEntry
+                while (entry != null) {
+                    if (!entry.isDirectory) {
+                        zos.putNextEntry(ZipEntry(entry.name))
+                        var n = zin.read(buf)
+                        while (n >= 0) {
+                            zos.write(buf, 0, n)
+                            n = zin.read(buf)
                         }
-                        entry = zin.nextEntry
+                        zos.closeEntry()
                     }
+                    entry = zin.nextEntry
                 }
             }
             // 2) Inject the per-machine config + install script + README.

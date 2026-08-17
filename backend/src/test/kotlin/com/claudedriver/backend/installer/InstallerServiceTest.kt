@@ -20,7 +20,10 @@ class InstallerServiceTest {
         val svc = InstallerService(bucket)
         val out = ByteArrayOutputStream()
         val config = """{"backendUrl":"https://x","connectUrl":"https://x:8443","machineId":"m","enrollmentCode":"c"}"""
-        svc.writeInstaller("macos", config, out)
+        svc.openRuntime("macos").use { rt -> svc.writeInstaller("macos", rt, config, out) }
+
+        // A real self-contained package is tens of MB — guards against the empty-zip (22-byte) bug.
+        assertTrue(out.size() > 50_000_000, "installer should be a real package, got ${out.size()} bytes")
 
         val names = mutableSetOf<String>()
         ZipInputStream(out.toByteArray().inputStream()).use { z ->
