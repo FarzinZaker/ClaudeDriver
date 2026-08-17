@@ -57,16 +57,23 @@ resource "aws_ecs_task_definition" "backend" {
       ]
 
       environment = [
-        { name = "ENVIRONMENT", value = var.environment },
-        { name = "SERVER_PORT", value = tostring(var.backend_container_port) },
-        { name = "PUBLIC_DOMAIN", value = var.domain_name }
+        { name = "CLAUDEDRIVER_ENV", value = var.environment },
+        { name = "BACKEND_HOST", value = "0.0.0.0" },
+        { name = "BACKEND_PORT", value = tostring(var.backend_container_port) },
+        { name = "WEBAUTHN_RP_ID", value = var.domain_name },
+        { name = "WEBAUTHN_RP_NAME", value = "ClaudeDriver" },
+        { name = "WEBAUTHN_ORIGIN", value = "https://${var.domain_name}" }
       ]
 
       # Secrets injected from SSM Parameter Store at task start (D8).
       secrets = [
         { name = "DATABASE_URL", valueFrom = aws_ssm_parameter.database_url.arn },
-        { name = "DATABASE_USERNAME", valueFrom = aws_ssm_parameter.database_username.arn },
-        { name = "DATABASE_PASSWORD", valueFrom = aws_ssm_parameter.database_password.arn }
+        { name = "DATABASE_USER", valueFrom = aws_ssm_parameter.database_username.arn },
+        { name = "DATABASE_PASSWORD", valueFrom = aws_ssm_parameter.database_password.arn },
+        { name = "SESSION_SIGNING_KEY", valueFrom = aws_ssm_parameter.session_signing_key.arn },
+        { name = "OPERATOR_BOOTSTRAP_CODE", valueFrom = aws_ssm_parameter.operator_bootstrap_code.arn },
+        { name = "CA_CERT_PEM", valueFrom = aws_ssm_parameter.ca_cert_pem.arn },
+        { name = "CA_KEY_PEM", valueFrom = aws_ssm_parameter.ca_key_pem.arn }
       ]
 
       logConfiguration = {

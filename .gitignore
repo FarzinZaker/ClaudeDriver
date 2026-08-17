@@ -51,3 +51,6 @@ web/dist/
 *.tfstate
 *.tfstate.*
 .terraform.lock.hcl
+
+### Deploy secrets (never commit) ###
+deploy/

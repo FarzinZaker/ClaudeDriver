@@ -70,3 +70,27 @@ variable "backend_container_port" {
   type        = number
   default     = 8080
 }
+
+variable "session_signing_key" {
+  description = "Secret key used by the backend to sign operator session tokens. Supply via TF_VAR_session_signing_key or a tfvars file kept out of git; never commit it."
+  type        = string
+  sensitive   = true
+}
+
+variable "operator_bootstrap_code" {
+  description = "One-time bootstrap code the backend uses to enroll the first operator. Supply via TF_VAR_operator_bootstrap_code or a tfvars file kept out of git; never commit it."
+  type        = string
+  sensitive   = true
+}
+
+variable "ca_cert_pem" {
+  description = "Persistent device-CA certificate (PEM) the backend uses to issue/verify device client certificates. Supply via TF_VAR_ca_cert_pem or a tfvars file kept out of git; never commit it."
+  type        = string
+  sensitive   = true
+}
+
+variable "ca_key_pem" {
+  description = "Persistent device-CA private key (PEM) the backend uses to sign device client certificates. Supply via TF_VAR_ca_key_pem or a tfvars file kept out of git; never commit it."
+  type        = string
+  sensitive   = true
+}

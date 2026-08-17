@@ -1,0 +1,22 @@
+# ClaudeDriver — Terraform variables for the AWS deployment.
+# This file is gitignored (lives under deploy/). Non-secret values only — secrets are passed via
+# TF_VAR_* environment variables at apply time (see deploy/RUNBOOK.md), never written here.
+
+environment = "prod"
+aws_region  = "us-east-1"
+
+# --- YOU FILL THESE (see RUNBOOK steps 1, 3, 4) ---
+domain_name               = "REPLACE_ME.yourdomain.com"                                    # the subdomain the backend serves
+acm_certificate_arn       = "arn:aws:acm:us-east-1:REPLACE_ACCOUNT_ID:certificate/REPLACE" # from `aws acm request-certificate`
+agent_ca_bundle_s3_bucket = "REPLACE_ME-claudedriver-trust"                                # S3 bucket holding ca.crt
+agent_ca_bundle_s3_key    = "ca.crt"
+container_image           = "REPLACE_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/claudedriver-backend:latest"
+
+# --- Budget / DB (defaults are fine) ---
+budget_notification_email = "you@example.com"
+monthly_budget_limit_usd  = 75
+db_username               = "claudedriver"
+db_name                   = "claudedriver"
+
+# Secrets (db_password, session_signing_key, operator_bootstrap_code, ca_cert_pem, ca_key_pem)
+# are NOT set here — they are exported as TF_VAR_* from deploy/secrets.env + deploy/ca/ at apply time.

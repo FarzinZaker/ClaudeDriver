@@ -94,3 +94,47 @@ resource "aws_ssm_parameter" "database_username" {
     Name = "claudedriver-database-username"
   }
 }
+
+resource "aws_ssm_parameter" "session_signing_key" {
+  name        = "/claudedriver/${var.environment}/SESSION_SIGNING_KEY"
+  description = "Secret key used by the ClaudeDriver backend to sign operator session tokens."
+  type        = "SecureString"
+  value       = var.session_signing_key
+
+  tags = {
+    Name = "claudedriver-session-signing-key"
+  }
+}
+
+resource "aws_ssm_parameter" "operator_bootstrap_code" {
+  name        = "/claudedriver/${var.environment}/OPERATOR_BOOTSTRAP_CODE"
+  description = "One-time bootstrap code used by the ClaudeDriver backend to enroll the first operator."
+  type        = "SecureString"
+  value       = var.operator_bootstrap_code
+
+  tags = {
+    Name = "claudedriver-operator-bootstrap-code"
+  }
+}
+
+resource "aws_ssm_parameter" "ca_cert_pem" {
+  name        = "/claudedriver/${var.environment}/CA_CERT_PEM"
+  description = "Persistent device-CA certificate (PEM) for the ClaudeDriver backend."
+  type        = "SecureString"
+  value       = var.ca_cert_pem
+
+  tags = {
+    Name = "claudedriver-ca-cert-pem"
+  }
+}
+
+resource "aws_ssm_parameter" "ca_key_pem" {
+  name        = "/claudedriver/${var.environment}/CA_KEY_PEM"
+  description = "Persistent device-CA private key (PEM) for the ClaudeDriver backend."
+  type        = "SecureString"
+  value       = var.ca_key_pem
+
+  tags = {
+    Name = "claudedriver-ca-key-pem"
+  }
+}
