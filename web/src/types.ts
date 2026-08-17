@@ -33,7 +33,8 @@ export interface Machine {
   name: string;
   os: MachineOs;
   status: MachineStatus;
-  connection: MachineConnection;
+  /** Null until the machine's agent has connected at least once. */
+  connection: MachineConnection | null;
 }
 
 export interface ServerInfo {

@@ -122,8 +122,8 @@ function MachineCard({
   onRevoke: (id: string, name: string) => void;
   revokePending: boolean;
 }) {
-  const { connection } = machine;
-  const offline = connection.state !== 'connected';
+  const connection = machine.connection;
+  const offline = !connection || connection.state !== 'connected';
   const revoked = machine.status === 'revoked';
   return (
     <li className="card machine-card" data-testid="machine-card">
@@ -132,14 +132,17 @@ function MachineCard({
         <span className={`badge badge--${machine.status}`}>{machine.status}</span>
       </div>
       <div className="machine-card__sub">
-        <span className={`conn conn--${connection.state}`} data-testid="machine-conn">
+        <span
+          className={`conn conn--${connection?.state ?? 'disconnected'}`}
+          data-testid="machine-conn"
+        >
           {offline ? 'offline' : 'online'}
         </span>
         <span className="machine-card__os">{machine.os}</span>
         <span className="machine-card__since">
-          {connection.since ? formatTime(connection.since) : 'never seen'}
+          {connection?.since ? formatTime(connection.since) : 'never seen'}
         </span>
-        {connection.protocolVersion && (
+        {connection?.protocolVersion && (
           <span className="machine-card__proto">v{connection.protocolVersion}</span>
         )}
       </div>

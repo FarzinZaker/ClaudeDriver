@@ -12,7 +12,7 @@ interface Props {
 
 /** Only connected, enrolled machines can accept a new run. */
 function isStartable(m: Machine): boolean {
-  return m.status === 'enrolled' && m.connection.state === 'connected';
+  return m.status === 'enrolled' && m.connection?.state === 'connected';
 }
 
 /**

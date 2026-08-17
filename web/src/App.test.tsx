@@ -675,3 +675,76 @@ describe('operator dashboard', () => {
     );
   });
 });
+
+describe('machine enrollment', () => {
+  const NEW_ID = 'cccccccc-0000-0000-0000-000000000010';
+
+  function pathOf(input: RequestInfo | URL): string {
+    const url =
+      typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    return url.replace(/^https?:\/\/[^/]+/, '');
+  }
+
+  it('renders a freshly-registered machine with a null connection without crashing', async () => {
+    // Regression: a just-registered (pending, never-connected) machine has connection === null.
+    // The machine card / health widgets must not throw (which blanked the screen).
+    const statusWithPending: StatusResponse = {
+      ...STATUS,
+      machines: [
+        ...STATUS.machines,
+        {
+          id: NEW_ID,
+          name: 'fresh-mac',
+          os: 'macos',
+          status: 'pending',
+          connection: null,
+        },
+      ],
+    };
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      if (pathOf(input) === '/status') return jsonResponse(statusWithPending);
+      return routeFetch(input);
+    });
+
+    renderApp();
+    expect(await screen.findByText('fresh-mac')).toBeInTheDocument();
+    // The card renders as offline / never seen rather than crashing.
+    const card = screen.getByText('fresh-mac').closest('[data-testid="machine-card"]')!;
+    expect(within(card as HTMLElement).getByTestId('machine-conn')).toHaveTextContent('offline');
+  });
+
+  it('enrolls a machine and surfaces the pre-configured installer download', async () => {
+    fetchMock.mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = pathOf(input);
+        if (path === '/machines' && init?.method === 'POST') {
+          return jsonResponse({ machineId: NEW_ID }, 201);
+        }
+        if (path === `/machines/${NEW_ID}/enrollment` && init?.method === 'POST') {
+          return jsonResponse(
+            { enrollmentCode: 'CODE-123', expiresAt: '2026-08-17T13:00:00Z' },
+            201,
+          );
+        }
+        return routeFetch(input);
+      },
+    );
+
+    renderApp();
+    await screen.findByText('alpha-macbook'); // dashboard loaded
+
+    fireEvent.change(screen.getByPlaceholderText('e.g. farzin-mac'), {
+      target: { value: 'my-new-mac' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /register machine/i }));
+
+    // The result view renders (no blank screen) with a working installer download link.
+    const link = await screen.findByRole('link', {
+      name: /download installer for macos/i,
+    });
+    expect(link).toHaveAttribute(
+      'href',
+      `/machines/${NEW_ID}/installer?os=macos`,
+    );
+  });
+});

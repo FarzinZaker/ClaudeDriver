@@ -14,7 +14,7 @@ const WS_LABEL: Record<WsStatus, string> = {
 
 /** Live health bar: WS link state + how many machines are currently online. */
 export function ConnectionHealth({ wsStatus, machines }: Props) {
-  const online = machines.filter((m) => m.connection.state === 'connected').length;
+  const online = machines.filter((m) => m.connection?.state === 'connected').length;
 
   return (
     <div className="health" role="status" aria-label="connection health">
