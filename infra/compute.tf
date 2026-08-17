@@ -140,6 +140,11 @@ resource "aws_lb" "main" {
 
   idle_timeout = 3600 # long idle for persistent WebSockets (Principle V)
 
+  # WebSocket upgrades require HTTP/1.1; with HTTP/2 the ALB resets the agent's
+  # mTLS WSS connection. Browsers use a separate HTTP/1.1 conn for WS so the
+  # dashboard is unaffected, but the agent client needs h2 off.
+  enable_http2 = false
+
   tags = {
     Name      = "claudedriver-alb"
     Component = "network"
