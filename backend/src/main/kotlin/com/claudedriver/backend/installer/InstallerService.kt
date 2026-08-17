@@ -137,6 +137,8 @@ class InstallerService(
               <key>EnvironmentVariables</key><dict><key>CLAUDEDRIVER_AGENT_DIR</key><string>${'$'}AGENT_DIR</string></dict>
               <key>RunAtLoad</key><true/>
               <key>KeepAlive</key><true/>
+              <key>ProcessType</key><string>Background</string>
+              <key>ThrottleInterval</key><integer>10</integer>
               <key>StandardOutPath</key><string>${'$'}AGENT_DIR/agent.log</string>
               <key>StandardErrorPath</key><string>${'$'}AGENT_DIR/agent.err.log</string>
             </dict></plist>
@@ -147,7 +149,8 @@ class InstallerService(
             echo "Installed and started. Logs: ${'$'}AGENT_DIR/agent.log"
         """.trimIndent() + "\n"
 
-        // Scheduled task at logon (no admin needed). Windows app-image layout: ClaudeDriverAgent\.
+        // Always-on scheduled task (no admin needed): starts at logon, restarts on failure, no time
+        // limit, runs on battery. Windows app-image layout: ClaudeDriverAgent\.
         private val WINDOWS_INSTALL_PS1 = """
             ${'$'}ErrorActionPreference = "Stop"
             ${'$'}here = Split-Path -Parent ${'$'}MyInvocation.MyCommand.Path
@@ -162,9 +165,13 @@ class InstallerService(
 
             ${'$'}launcher = Join-Path ${'$'}dest "ClaudeDriverAgent.exe"
             if (-not (Test-Path ${'$'}launcher)) { ${'$'}launcher = Join-Path ${'$'}dest "ClaudeDriverAgent.bat" }
-            schtasks /Create /TN "ClaudeDriverAgent" /TR "`"${'$'}launcher`"" /SC ONLOGON /RL LIMITED /F | Out-Null
-            schtasks /Run /TN "ClaudeDriverAgent" | Out-Null
-            Write-Host "Installed and started (Task Scheduler: ClaudeDriverAgent)."
+
+            ${'$'}action = New-ScheduledTaskAction -Execute ${'$'}launcher
+            ${'$'}trigger = New-ScheduledTaskTrigger -AtLogOn
+            ${'$'}settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
+            Register-ScheduledTask -TaskName "ClaudeDriverAgent" -Action ${'$'}action -Trigger ${'$'}trigger -Settings ${'$'}settings -Description "ClaudeDriver monitoring agent" -Force | Out-Null
+            Start-ScheduledTask -TaskName "ClaudeDriverAgent"
+            Write-Host "Installed as an always-on scheduled task (ClaudeDriverAgent)."
         """.trimIndent() + "\n"
 
         private val LINUX_INSTALL_SH = """
@@ -184,12 +191,15 @@ class InstallerService(
             Environment=CLAUDEDRIVER_AGENT_DIR=${'$'}AGENT_DIR
             ExecStart=${'$'}DEST/bin/ClaudeDriverAgent
             Restart=always
+            RestartSec=10
             [Install]
             WantedBy=default.target
             UNIT
+            # Linger so the user service starts at boot without an interactive login (always-on).
+            loginctl enable-linger "${'$'}(whoami)" 2>/dev/null || true
             systemctl --user daemon-reload
             systemctl --user enable --now claudedriver-agent.service
-            echo "Installed and started (systemd --user: claudedriver-agent)."
+            echo "Installed and started (systemd --user: claudedriver-agent, lingering enabled)."
         """.trimIndent() + "\n"
     }
 }
