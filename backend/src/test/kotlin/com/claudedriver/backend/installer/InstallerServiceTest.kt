@@ -25,6 +25,11 @@ class InstallerServiceTest {
         // A real self-contained package is tens of MB — guards against the empty-zip (22-byte) bug.
         assertTrue(out.size() > 50_000_000, "installer should be a real package, got ${out.size()} bytes")
 
+        // Windows runtime too (bundled JRE + .bat launcher).
+        val win = ByteArrayOutputStream()
+        svc.openRuntime("windows").use { rt -> svc.writeInstaller("windows", rt, config, win) }
+        assertTrue(win.size() > 50_000_000, "windows installer should be a real package, got ${win.size()} bytes")
+
         val names = mutableSetOf<String>()
         ZipInputStream(out.toByteArray().inputStream()).use { z ->
             var e = z.nextEntry

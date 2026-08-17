@@ -160,8 +160,9 @@ class InstallerService(
             Copy-Item -Force (Join-Path ${'$'}here "agent.config") (Join-Path ${'$'}agentDir "agent.config")
             [Environment]::SetEnvironmentVariable("CLAUDEDRIVER_AGENT_DIR", ${'$'}agentDir, "User")
 
-            ${'$'}exe = Join-Path ${'$'}dest "ClaudeDriverAgent.exe"
-            schtasks /Create /TN "ClaudeDriverAgent" /TR "`"${'$'}exe`"" /SC ONLOGON /RL LIMITED /F | Out-Null
+            ${'$'}launcher = Join-Path ${'$'}dest "ClaudeDriverAgent.exe"
+            if (-not (Test-Path ${'$'}launcher)) { ${'$'}launcher = Join-Path ${'$'}dest "ClaudeDriverAgent.bat" }
+            schtasks /Create /TN "ClaudeDriverAgent" /TR "`"${'$'}launcher`"" /SC ONLOGON /RL LIMITED /F | Out-Null
             schtasks /Run /TN "ClaudeDriverAgent" | Out-Null
             Write-Host "Installed and started (Task Scheduler: ClaudeDriverAgent)."
         """.trimIndent() + "\n"
