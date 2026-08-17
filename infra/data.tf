@@ -40,7 +40,8 @@ resource "aws_db_instance" "main" {
   apply_immediately       = true
 
   tags = {
-    Name = "claudedriver-postgres"
+    Name      = "claudedriver-postgres"
+    Component = "database"
   }
 }
 

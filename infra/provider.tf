@@ -8,6 +8,8 @@ provider "aws" {
     tags = {
       Project     = "ClaudeDriver"
       Environment = var.environment
+      ManagedBy   = "terraform"
+      Owner       = var.budget_notification_email
     }
   }
 }

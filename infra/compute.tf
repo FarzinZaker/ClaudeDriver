@@ -10,7 +10,8 @@ resource "aws_cloudwatch_log_group" "backend" {
   retention_in_days = 14
 
   tags = {
-    Name = "claudedriver-backend-logs"
+    Name      = "claudedriver-backend-logs"
+    Component = "observability"
   }
 }
 
@@ -25,7 +26,8 @@ resource "aws_ecs_cluster" "main" {
   }
 
   tags = {
-    Name = "claudedriver"
+    Name      = "claudedriver"
+    Component = "compute"
   }
 }
 
@@ -88,7 +90,8 @@ resource "aws_ecs_task_definition" "backend" {
   ])
 
   tags = {
-    Name = "claudedriver-backend"
+    Name      = "claudedriver-backend"
+    Component = "compute"
   }
 }
 
@@ -120,7 +123,8 @@ resource "aws_ecs_service" "backend" {
   ]
 
   tags = {
-    Name = "claudedriver-backend"
+    Name      = "claudedriver-backend"
+    Component = "compute"
   }
 }
 
@@ -136,7 +140,8 @@ resource "aws_lb" "main" {
   idle_timeout = 3600 # long idle for persistent WebSockets (Principle V)
 
   tags = {
-    Name = "claudedriver-alb"
+    Name      = "claudedriver-alb"
+    Component = "network"
   }
 }
 
@@ -169,7 +174,8 @@ resource "aws_lb_target_group" "backend" {
   }
 
   tags = {
-    Name = "claudedriver-backend"
+    Name      = "claudedriver-backend"
+    Component = "network"
   }
 }
 
