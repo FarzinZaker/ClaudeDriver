@@ -373,3 +373,55 @@ export async function search(q: string): Promise<SearchResult[]> {
   const body = (await res.json()) as SearchResponse;
   return body.results ?? [];
 }
+
+// ---------------------------------------------------------------------------
+// Machine enrollment
+// ---------------------------------------------------------------------------
+
+export interface EnrollmentTicket {
+  machineId: string;
+  enrollmentCode: string;
+  /** RFC3339 expiry of the one-time code. */
+  expiresAt: string;
+}
+
+/**
+ * Register a machine and issue a one-time enrollment code its agent redeems for
+ * a device certificate. Two backend calls: `POST /machines` then
+ * `POST /machines/{id}/enrollment`.
+ */
+export async function enrollMachine(
+  name: string,
+  os: 'windows' | 'macos',
+): Promise<EnrollmentTicket> {
+  const created = await fetch('/machines', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({ name, os }),
+  });
+  if (!created.ok) {
+    throw new ApiError(`POST /machines failed: ${created.status}`, created.status);
+  }
+  const { machineId } = (await created.json()) as { machineId: string };
+
+  const enrolled = await fetch(
+    `/machines/${encodeURIComponent(machineId)}/enrollment`,
+    {
+      method: 'POST',
+      credentials: 'include',
+      headers: { accept: 'application/json' },
+    },
+  );
+  if (!enrolled.ok) {
+    throw new ApiError(
+      `POST /machines/${machineId}/enrollment failed: ${enrolled.status}`,
+      enrolled.status,
+    );
+  }
+  const { enrollmentCode, expiresAt } = (await enrolled.json()) as {
+    enrollmentCode: string;
+    expiresAt: string;
+  };
+  return { machineId, enrollmentCode, expiresAt };
+}

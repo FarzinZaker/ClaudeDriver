@@ -23,12 +23,14 @@ COPY gradle ./gradle
 COPY settings.gradle.kts build.gradle.kts ./
 COPY gradle.properties* ./
 
-# Copy the multi-module sources needed to build :backend (shared is consumed).
+# Copy the multi-module sources needed to build :backend and the :agent distribution.
 COPY shared ./shared
 COPY backend ./backend
+COPY agent ./agent
 
 RUN chmod +x ./gradlew \
-    && ./gradlew --no-daemon :backend:installDist
+    && ./gradlew --no-daemon :backend:installDist :agent:distZip \
+    && mkdir -p /out && cp agent/build/distributions/*.zip /out/agent.zip
 
 # ---- Stage 2: minimal JRE runtime, non-root ----
 FROM eclipse-temurin:21-jre AS runtime
@@ -44,6 +46,9 @@ COPY --from=build --chown=app:app /src/backend/build/install/backend/ /app/
 
 # Copy the built SPA; the backend serves it from WEB_ROOT (default "web" → /app/web).
 COPY --from=web --chown=app:app /web/dist/ /app/web/
+
+# Bundle the cross-platform agent distribution; served at GET /download/agent.zip.
+COPY --from=build --chown=app:app /out/agent.zip /app/downloads/agent.zip
 
 USER app
 

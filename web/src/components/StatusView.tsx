@@ -20,6 +20,7 @@ import { QuestionsInbox } from './QuestionsInbox';
 import { SearchBox } from './SearchBox';
 import { SESSION_STATE_LABEL } from './SessionDetail';
 import { StartRunPanel } from './StartRunPanel';
+import { EnrollMachinePanel } from './EnrollMachinePanel';
 
 interface Props {
   server: ServerInfo;
@@ -41,6 +42,8 @@ interface Props {
   startRunPending?: boolean;
   onStartManaged: (machineId: string, projectPath: string, instruction: string) => void;
   startManagedPending?: boolean;
+  /** Refresh the machine list after a successful enrollment. */
+  onEnrolled: () => void;
   // Phase 4 — questions inbox
   questions: QuestionSummary[];
   onAnswerQuestion: (id: string, input: AnswerInput) => void;
@@ -178,6 +181,7 @@ export function StatusView({
   startRunPending,
   onStartManaged,
   startManagedPending,
+  onEnrolled,
   questions,
   onAnswerQuestion,
   answerPendingId,
@@ -249,6 +253,8 @@ export function StatusView({
         onOpenSession={onOpenSession}
         ackPendingId={ackPendingId}
       />
+
+      <EnrollMachinePanel onEnrolled={onEnrolled} />
 
       <section aria-labelledby="machines-heading">
         <h2 id="machines-heading">

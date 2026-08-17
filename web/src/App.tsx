@@ -731,6 +731,9 @@ export default function App() {
           startManagedMutation.mutate({ machineId, projectPath, instruction })
         }
         startManagedPending={startManagedMutation.isPending}
+        onEnrolled={() =>
+          void queryClient.invalidateQueries({ queryKey: STATUS_QUERY_KEY })
+        }
         questions={questions}
         onAnswerQuestion={(id, input) => answerMutation.mutate({ id, input })}
         answerPendingId={answerMutation.isPending ? answerMutation.variables.id : null}

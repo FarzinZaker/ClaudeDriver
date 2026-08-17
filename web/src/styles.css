@@ -1253,3 +1253,35 @@ h2 {
     grid-column: 1 / 2;
   }
 }
+
+/* --- Machine enrollment panel --- */
+.enroll {
+  margin-block: 1.5rem;
+}
+.enroll__form {
+  display: grid;
+  gap: 0.75rem;
+  max-width: 28rem;
+}
+.enroll__steps {
+  margin: 0.5rem 0 1rem;
+  padding-left: 1.25rem;
+  display: grid;
+  gap: 0.6rem;
+  line-height: 1.5;
+}
+.enroll__cmd {
+  margin: 0.35rem 0 0;
+  padding: 0.6rem 0.75rem;
+  border-radius: 6px;
+  background: rgba(127, 127, 127, 0.14);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-x: auto;
+}
+.enroll__error {
+  color: #c0392b;
+  margin-top: 0.5rem;
+}

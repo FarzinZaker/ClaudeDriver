@@ -59,7 +59,11 @@ import io.ktor.server.request.path
 import io.ktor.server.request.receive
 import io.ktor.server.request.receiveText
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondFile
 import io.ktor.server.response.respondText
+import io.ktor.server.response.header
+import io.ktor.http.HttpHeaders
+import io.ktor.http.ContentDisposition
 import io.ktor.server.routing.RoutingContext
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
@@ -99,6 +103,25 @@ private suspend fun RoutingContext.requireOperator(deps: AppDeps): OperatorSessi
 fun Application.configureRouting(deps: AppDeps) = routing {
     get("/healthz") {
         call.respondText("""{"status":"ok","version":"$PROTOCOL_VERSION"}""", ContentType.Application.Json)
+    }
+
+    // Cross-platform agent distribution (bundled into the image at AGENT_DIST_PATH). Not secret —
+    // the enrollment code + device-CA mTLS are the security boundary, not the binary.
+    get("/download/agent.zip") {
+        val dist = java.io.File(
+            System.getenv("AGENT_DIST_PATH")?.takeIf { it.isNotBlank() } ?: "downloads/agent.zip",
+        )
+        if (dist.isFile) {
+            call.response.header(
+                HttpHeaders.ContentDisposition,
+                ContentDisposition.Attachment
+                    .withParameter(ContentDisposition.Parameters.FileName, "claudedriver-agent.zip")
+                    .toString(),
+            )
+            call.respondFile(dist)
+        } else {
+            call.respond(HttpStatusCode.NotFound, ErrorResponse("not_bundled", "Agent distribution is not available"))
+        }
     }
 
     // ---- Operator WebAuthn (self-hosted passkeys) ----
