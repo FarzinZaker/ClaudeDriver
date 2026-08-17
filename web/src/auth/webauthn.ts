@@ -5,11 +5,11 @@
  * authentication (self-hosted)"):
  *
  *   Registration (first operator only, gated by a bootstrap code):
- *     POST /auth/register/options  { bootstrapCode }  -> PublicKeyCredentialCreationOptions (JSON)
+ *     POST /auth/register/options  { bootstrapCode }  -> { publicKey: PublicKeyCredentialCreationOptions } (WebAuthn-JSON)
  *     POST /auth/register/verify   <attestation>      -> 201
  *
  *   Login (returns a signed session cookie):
- *     POST /auth/login/options     {}                 -> PublicKeyCredentialRequestOptions (JSON)
+ *     POST /auth/login/options     {}                 -> { publicKey: PublicKeyCredentialRequestOptions } (WebAuthn-JSON)
  *     POST /auth/login/verify      <assertion>        -> 200 + Set-Cookie (session)
  *
  *   POST /auth/logout -> 204
@@ -60,6 +60,16 @@ export class AuthError extends Error {
     super(message);
     this.name = 'AuthError';
   }
+}
+
+/**
+ * The server serializes options with the Yubico library's standard WebAuthn-JSON
+ * envelope: `{ "publicKey": { … } }` (the exact shape `navigator.credentials`
+ * consumes). Unwrap it to the inner options, tolerating a bare object too.
+ */
+function unwrapPublicKey<T>(raw: T | { publicKey: T }): T {
+  const wrapped = raw as { publicKey?: T };
+  return wrapped.publicKey ?? (raw as T);
 }
 
 async function postJson<T>(url: string, body: unknown): Promise<T> {
@@ -176,9 +186,11 @@ function assertWebAuthnAvailable(): void {
 export async function registerPasskey(bootstrapCode: string): Promise<void> {
   assertWebAuthnAvailable();
 
-  const serverOptions = await postJson<ServerCreationOptions>(
-    '/auth/register/options',
-    { bootstrapCode },
+  const serverOptions = unwrapPublicKey(
+    await postJson<ServerCreationOptions | { publicKey: ServerCreationOptions }>(
+      '/auth/register/options',
+      { bootstrapCode },
+    ),
   );
 
   const credential = (await navigator.credentials.create({
@@ -199,7 +211,12 @@ export async function registerPasskey(bootstrapCode: string): Promise<void> {
 export async function loginWithPasskey(): Promise<void> {
   assertWebAuthnAvailable();
 
-  const serverOptions = await postJson<ServerRequestOptions>('/auth/login/options', {});
+  const serverOptions = unwrapPublicKey(
+    await postJson<ServerRequestOptions | { publicKey: ServerRequestOptions }>(
+      '/auth/login/options',
+      {},
+    ),
+  );
 
   const credential = (await navigator.credentials.get({
     publicKey: toRequestOptions(serverOptions),
