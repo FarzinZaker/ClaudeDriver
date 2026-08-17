@@ -60,6 +60,12 @@ variable "monthly_budget_limit_usd" {
   default     = "50"
 }
 
+variable "enable_budget" {
+  description = "Whether to create the AWS Budget. Must be false when deploying into a linked/member account of an Organization (only the payer account can create budgets); create the tag-scoped budget in the payer account instead."
+  type        = bool
+  default     = true
+}
+
 variable "container_image" {
   description = "Fully-qualified container image reference for the backend ECS task (e.g. <account>.dkr.ecr.<region>.amazonaws.com/claudedriver-backend:<tag>)."
   type        = string

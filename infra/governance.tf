@@ -100,7 +100,7 @@ resource "aws_iam_role_policy" "task_runtime" {
 
 resource "aws_resourcegroups_group" "project" {
   name        = "claudedriver"
-  description = "All ClaudeDriver resources, grouped by the Project cost-allocation tag."
+  description = "All ClaudeDriver resources grouped by the Project cost-allocation tag"
 
   resource_query {
     query = jsonencode({
@@ -123,6 +123,11 @@ resource "aws_resourcegroups_group" "project" {
 # Scoped to the Project=ClaudeDriver tag so it tracks only this project's spend.
 
 resource "aws_budgets_budget" "monthly" {
+  # AWS Budgets can only be created by the payer/management account. When this
+  # account is a linked member of an Organization, set enable_budget=false and
+  # create the tag-scoped budget in the payer account (see deploy/RUNBOOK.md).
+  count = var.enable_budget ? 1 : 0
+
   name         = "claudedriver-monthly"
   budget_type  = "COST"
   limit_amount = var.monthly_budget_limit_usd
