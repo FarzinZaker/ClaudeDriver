@@ -42,12 +42,28 @@ class ProcessMonitor(private val intervalMillis: Long = 2000) {
         return ProcessSnapshot(processes)
     }
 
-    private fun isClaudeCode(p: OSProcess): Boolean {
-        val name = (p.name ?: "").lowercase()
-        val cmd = (p.commandLine ?: "").lowercase()
-        val looksLikeClaude = name == "claude" || "claude " in cmd || cmd.endsWith("claude") || "/claude" in cmd
-        // Never count our own agent (or the backend) as a monitored Claude Code process.
-        val isOurs = "claudedriver" in cmd || "com.claudedriver" in cmd
-        return looksLikeClaude && !isOurs
+    private fun isClaudeCode(p: OSProcess): Boolean =
+        classifyClaudeCode((p.name ?: "").lowercase(), (p.commandLine ?: "").lowercase())
+
+    companion object {
+        // A `claude` executable at a path boundary or start of the command line (e.g. `claude -c`,
+        // `/opt/homebrew/bin/claude`, `claude.cmd`, `node .../.bin/claude`).
+        private val CLI_EXECUTABLE = Regex("""(^|[/\\])claude(\.cmd|\.exe)?(\s|$)""")
+
+        /**
+         * Match the Claude Code **CLI** while excluding the Claude **desktop** app (an Electron
+         * bundle under `Claude.app` / `Claude Helper`) and our own agent — otherwise the desktop
+         * app would show up as a monitored "session". [name] and [cmd] must be lowercased.
+         */
+        internal fun classifyClaudeCode(name: String, cmd: String): Boolean {
+            val isDesktopApp = "claude.app" in cmd || "claude helper" in cmd || "claudefordesktop" in cmd
+            val isOurs = "claudedriver" in cmd || "com.claudedriver" in cmd
+            if (isDesktopApp || isOurs) return false
+
+            return "claude-code" in cmd ||
+                "@anthropic-ai/claude" in cmd ||
+                name == "claude" ||
+                CLI_EXECUTABLE.containsMatchIn(cmd)
+        }
     }
 }
