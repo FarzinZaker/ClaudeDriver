@@ -18,19 +18,27 @@ anything the session asks, see the **full transcript**, search **history**, and 
 pass** tightens security and cost. It builds on Phases 0–3 (enrollment, the authenticated agent
 channel, monitoring, alerts, approvals, remote control).
 
-> **Feasibility note (why this is a spike).** The Claude Agent SDK is Python/TypeScript; the agent is
-> Kotlin/JVM. Managed mode therefore drives an SDK runtime as a companion process on the machine and
-> bridges it to the agent. This is a genuine spike: the SDK-managed path must be validated for
-> feasibility and cost before full build, and it is an **additional** mode — hook-based monitoring
-> and blocking approvals (Phases 1–2) remain for sessions not run in managed mode.
+> **Feasibility note (committed full build).** The Claude Agent SDK is Python/TypeScript; the agent is
+> Kotlin/JVM. Managed mode therefore drives an SDK **companion runtime** on the machine, bridged to the
+> agent over a defined protocol. Phase 4 commits to building this integration in full. It remains an
+> **additional** mode — hook-based monitoring and blocking approvals (Phases 1–2) stay for sessions not
+> run in managed mode. Note: validating the *real* SDK end-to-end needs a Claude Code + SDK runtime and
+> API access not present in the build environment, so that final validation is a deploy/CI step; the
+> bridge protocol is otherwise exercised with a fake companion.
 
 ## Clarifications
 
-### Session 2026-08-16
+### Session 2026-08-17
 
-_None yet. Three assumptions worth confirming in `/speckit.clarify` before planning: whether to
-**commit to SDK-managed mode** now (vs. spike-only), how much of **history/search** is in Phase 4,
-and which **hardening** items are in scope for this phase._
+- Q: How far to take SDK-managed mode? → A: **Full build now** — commit to the complete SDK-managed
+  integration this phase (the Kotlin agent driving an Agent-SDK companion runtime over a defined
+  bridge). **Honest caveat**: validating the *real* SDK end-to-end needs a Claude Code + SDK runtime
+  and API access not present in the build environment, so that final validation is a deploy/CI-with-key
+  step; the bridge protocol is exercised with a fake companion in the meantime.
+- Q: History & search scope? → A: **Full** — managed-session transcript + browse past sessions +
+  search across them (US3 complete).
+- Q: Hardening scope? → A: **Full pass** — credential rotation/revocation flows + threat-model
+  checklist + cost review (FR-010/011/012).
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -215,9 +223,10 @@ present.
   approvals, and remote control are reused; questions/answers and managed-session control travel the
   same authenticated backend↔agent channel.
 - **Managed mode uses the Claude Agent SDK** (Python/TypeScript) driven as a companion runtime by the
-  on-machine agent; this is a **spike** — feasibility and cost are validated before full build, and it
-  is additive (monitored-only sessions keep Phase 1–3 behavior). Confirm the commit-vs-spike scope in
-  `/speckit.clarify`.
+  on-machine agent over a defined bridge protocol; Phase 4 commits to building this in full
+  (clarified). It is additive (monitored-only sessions keep Phase 1–3 behavior). Validating the real
+  SDK end-to-end needs a runtime + API access (a deploy/CI-with-key step); the bridge is exercised
+  with a fake companion otherwise.
 - **No ClaudeDriver timeout on questions** (consistent with the Phase 2 approvals decision): a managed
   session waits for the operator; if the SDK runtime's own limit forces resolution, the session is
   told no answer was given (safe default), never a fabricated one.
@@ -225,8 +234,8 @@ present.
   parsing an unsupported internal transcript file.
 - **Single operator** (from Phase 2): scope enforcement deferred to multi-user; audit + at-most-once +
   authenticated channel apply now.
-- **Hardening scope** (confirm in `/speckit.clarify`): a review + checklist + credential
-  rotation/revocation flows, not a full re-architecture.
+- **Hardening scope** (clarified: full pass): credential rotation/revocation flows + a threat-model
+  checklist + a cost review — not a full re-architecture.
 
 ## Dependencies
 

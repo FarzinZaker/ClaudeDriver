@@ -31,15 +31,13 @@
 
 ## Notes
 
-- Validation passed on first iteration.
-- Outcome-focused: answer arbitrary questions, managed mode as an additive interactive mode, full
-  transcript + history/search, and a hardening review. Mechanisms (the Claude Agent SDK companion
-  runtime bridged to the Kotlin agent) are deferred to `/speckit.plan`.
-- **Feasibility flagged**: managed mode is a **spike** — the SDK is Python/TS while the agent is
-  Kotlin/JVM. The "Feasibility note" in the overview and the assumptions make this explicit; the
-  commit-vs-spike scope is a `/speckit.clarify` item.
+- Re-validated 2026-08-17 after `/speckit.clarify`: all items still pass (16/16); no checkbox changed.
+- Clarifications integrated: **full build** of SDK-managed mode this phase; **full** history + search;
+  **full** hardening pass (rotation/revocation + checklist + cost review).
+- **Feasibility caveat (retained)**: managed mode is committed to full build, but the SDK is Python/TS
+  while the agent is Kotlin/JVM — validating the real SDK end-to-end needs a runtime + API access not
+  in this environment, so that final validation is a deploy/CI step and the bridge is exercised with a
+  fake companion. Stated in the overview note + assumptions.
 - **Load-bearing safety**: FR-002/003/007 and SC-003 state the absolutes — never fabricate an answer,
-  never treat no-input as approval (Constitution Principle I), consistent with the Phase 2 no-timeout
-  decision.
-- Three assumptions to confirm in `/speckit.clarify`: commit to SDK-managed mode vs. spike-only; how
-  much history/search; which hardening items are in scope.
+  never treat no-input as approval (Principle I), consistent with the Phase 2 no-timeout decision.
+- Mechanisms (the SDK companion + bridge protocol) are detailed in `/speckit.plan`.
