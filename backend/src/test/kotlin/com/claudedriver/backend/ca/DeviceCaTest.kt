@@ -36,6 +36,17 @@ class DeviceCaTest {
     }
 
     @Test
+    fun `a persistent CA round-trips through PEM and still issues valid certs`() {
+        val ca = DeviceCa.generate()
+        val loaded = DeviceCa.loadFromPem(ca.caCertificatePem(), ca.caPrivateKeyPem())
+        assertEquals(ca.caCertificatePem().trim(), loaded.caCertificatePem().trim())
+
+        val issued = loaded.issueFromCsr(csrPem("m-persist"), "m-persist")
+        val cert = DeviceCa.parseCertificate(issued.certificatePem)
+        assertDoesNotThrow { cert.verify(loaded.caCertificate.publicKey) }
+    }
+
+    @Test
     fun `two issued certs have distinct fingerprints and serials`() {
         val ca = DeviceCa.generate()
         val a = ca.issueFromCsr(csrPem("m-a"), "m-a")

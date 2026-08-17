@@ -85,6 +85,9 @@ class DeviceCa(
 
     fun caCertificatePem(): String = toPem(caCertificate)
 
+    /** Export the CA private key (PEM) — for provisioning a persistent CA into a secret store. */
+    fun caPrivateKeyPem(): String = toPem(caPrivateKey)
+
     companion object {
         const val BC = BouncyCastleProvider.PROVIDER_NAME
 
@@ -133,6 +136,24 @@ class DeviceCa(
             val cf = CertificateFactory.getInstance("X.509")
             return cf.generateCertificate(pem.byteInputStream()) as X509Certificate
         }
+
+        /** Load a persistent CA from PEM material (prod: cert from config, key from a secret store). */
+        fun loadFromPem(certPem: String, keyPem: String): DeviceCa =
+            DeviceCa(parseCertificate(certPem), parsePrivateKey(keyPem))
+
+        fun loadFromFiles(certPath: String, keyPath: String): DeviceCa =
+            loadFromPem(java.io.File(certPath).readText(), java.io.File(keyPath).readText())
+
+        private fun parsePrivateKey(pem: String): java.security.PrivateKey =
+            org.bouncycastle.openssl.PEMParser(StringReader(pem)).use { parser ->
+                val obj = parser.readObject()
+                val converter = org.bouncycastle.openssl.jcajce.JcaPEMKeyConverter().setProvider(BC)
+                when (obj) {
+                    is org.bouncycastle.openssl.PEMKeyPair -> converter.getKeyPair(obj).private
+                    is org.bouncycastle.asn1.pkcs.PrivateKeyInfo -> converter.getPrivateKey(obj)
+                    else -> throw IllegalArgumentException("Unsupported private key PEM")
+                }
+            }
 
         private fun parseCsr(pem: String): PKCS10CertificationRequest =
             PEMParser(StringReader(pem)).use { parser ->

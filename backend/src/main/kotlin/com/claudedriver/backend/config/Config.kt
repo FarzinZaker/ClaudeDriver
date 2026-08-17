@@ -17,6 +17,10 @@ data class Config(
     val webAuthnRpName: String,
     val webAuthnOrigin: String,
     val operatorBootstrapCode: String,
+    val caCertPath: String? = null,
+    val caKeyPath: String? = null,
+    val caCertPem: String? = null,
+    val caKeyPem: String? = null,
 ) {
     companion object {
         private fun required(name: String): String {
@@ -47,6 +51,10 @@ data class Config(
                 webAuthnRpName = optional("WEBAUTHN_RP_NAME", "ClaudeDriver"),
                 webAuthnOrigin = optional("WEBAUTHN_ORIGIN", "http://localhost:5173"),
                 operatorBootstrapCode = secret("OPERATOR_BOOTSTRAP_CODE", "dev-bootstrap"),
+                caCertPath = System.getenv("CA_CERT_PATH")?.takeIf { it.isNotBlank() },
+                caKeyPath = System.getenv("CA_KEY_PATH")?.takeIf { it.isNotBlank() },
+                caCertPem = System.getenv("CA_CERT_PEM")?.takeIf { it.isNotBlank() },
+                caKeyPem = System.getenv("CA_KEY_PEM")?.takeIf { it.isNotBlank() },
             )
         }
     }

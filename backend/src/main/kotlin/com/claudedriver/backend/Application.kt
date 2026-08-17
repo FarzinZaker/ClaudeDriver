@@ -65,9 +65,22 @@ class AppDeps(
     companion object {
         fun create(config: Config, database: Database): AppDeps {
             val audit = AuditRepository(database)
-            // Phase 0: generate a device CA at startup. NOTE: a fresh CA per restart invalidates
-            // previously issued certs — prod MUST load a persistent CA from AWS Secrets Manager.
-            val ca = DeviceCa.generate()
+            // Prefer a persistent CA (cert path from config, key from a mounted secret) so the ALB
+            // mTLS trust store stays valid across restarts. Fall back to a throwaway CA for local dev.
+            val ca = when {
+                config.caCertPem != null && config.caKeyPem != null -> {
+                    log.info("Loading persistent device CA from CA_CERT_PEM/CA_KEY_PEM")
+                    DeviceCa.loadFromPem(config.caCertPem, config.caKeyPem)
+                }
+                config.caCertPath != null && config.caKeyPath != null -> {
+                    log.info("Loading persistent device CA from ${config.caCertPath}")
+                    DeviceCa.loadFromFiles(config.caCertPath, config.caKeyPath)
+                }
+                else -> {
+                    log.warn("No CA_CERT_PEM/PATH set — generating an ephemeral device CA (dev only)")
+                    DeviceCa.generate()
+                }
+            }
             val operatorStore = OperatorStore(database)
             val hub = OperatorHub()
             val agentHub = AgentHub()
