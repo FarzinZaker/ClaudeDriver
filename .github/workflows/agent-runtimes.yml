@@ -1,0 +1,91 @@
+name: Build agent runtimes
+
+# Builds the self-contained per-OS agent runtimes (bundled JRE, no Java needed to run) with jpackage
+# and uploads them to the S3 bucket the backend wraps into per-machine installers.
+#
+# Required repo configuration:
+#   - Variable  AGENT_RUNTIMES_BUCKET   e.g. 612990353705-claudedriver-agent-runtimes
+#   - Secret    AWS_ROLE_ARN            an IAM role this repo can assume via GitHub OIDC with
+#                                       s3:PutObject on the bucket (recommended), OR set
+#                                       AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY secrets instead
+#                                       and swap the credentials step below.
+#   - Variable  AWS_REGION              e.g. us-east-1
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'agent/**'
+      - 'shared/**'
+      - 'gradle/**'
+      - '.github/workflows/agent-runtimes.yml'
+
+permissions:
+  id-token: write   # for AWS OIDC
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14         # Apple Silicon
+            key: agent-macos-arm64.zip
+            pack: macos
+          - os: windows-latest
+            key: agent-windows-x64.zip
+            pack: windows
+          - os: ubuntu-latest
+            key: agent-linux-x64.zip
+            pack: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Build agent distribution
+        shell: bash
+        run: ./gradlew --no-daemon :agent:installDist
+
+      - name: jpackage self-contained app-image
+        shell: bash
+        run: |
+          jpackage --type app-image --name ClaudeDriverAgent \
+            --input agent/build/install/agent/lib \
+            --main-jar agent.jar \
+            --main-class com.claudedriver.agent.MainKt \
+            --dest dist
+
+      - name: Package (macOS/Linux)
+        if: matrix.pack != 'windows'
+        shell: bash
+        run: |
+          cd dist
+          if [ "${{ matrix.pack }}" = "macos" ]; then
+            zip -q -r -y "../${{ matrix.key }}" ClaudeDriverAgent.app
+          else
+            zip -q -r "../${{ matrix.key }}" ClaudeDriverAgent
+          fi
+
+      - name: Package (Windows)
+        if: matrix.pack == 'windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/ClaudeDriverAgent -DestinationPath ${{ matrix.key }} -Force
+
+      # OIDC role assumption (recommended). To use static keys instead, replace `role-to-assume`
+      # with `aws-access-key-id` / `aws-secret-access-key` from secrets.
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Upload runtime to S3
+        shell: bash
+        run: aws s3 cp "${{ matrix.key }}" "s3://${{ vars.AGENT_RUNTIMES_BUCKET }}/${{ matrix.key }}"
