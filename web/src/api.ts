@@ -425,3 +425,21 @@ export async function enrollMachine(
   };
   return { machineId, enrollmentCode, expiresAt };
 }
+
+/**
+ * De-register a machine (`POST /machines/{id}/revoke`): revokes its device
+ * certificate so its agent can no longer connect, and marks it revoked.
+ */
+export async function revokeMachine(machineId: string): Promise<void> {
+  const res = await fetch(`/machines/${encodeURIComponent(machineId)}/revoke`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { accept: 'application/json' },
+  });
+  if (!res.ok) {
+    throw new ApiError(
+      `POST /machines/${machineId}/revoke failed: ${res.status}`,
+      res.status,
+    );
+  }
+}

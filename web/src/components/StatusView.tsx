@@ -44,6 +44,8 @@ interface Props {
   startManagedPending?: boolean;
   /** Refresh the machine list after a successful enrollment. */
   onEnrolled: () => void;
+  onRevokeMachine: (id: string, name: string) => void;
+  revokePendingId?: string | null;
   // Phase 4 — questions inbox
   questions: QuestionSummary[];
   onAnswerQuestion: (id: string, input: AnswerInput) => void;
@@ -111,13 +113,18 @@ function MachineCard({
   machine,
   sessions,
   onOpenSession,
+  onRevoke,
+  revokePending,
 }: {
   machine: Machine;
   sessions: SessionSummary[];
   onOpenSession: (id: string) => void;
+  onRevoke: (id: string, name: string) => void;
+  revokePending: boolean;
 }) {
   const { connection } = machine;
   const offline = connection.state !== 'connected';
+  const revoked = machine.status === 'revoked';
   return (
     <li className="card machine-card" data-testid="machine-card">
       <div className="machine-card__head">
@@ -132,6 +139,9 @@ function MachineCard({
         <span className="machine-card__since">
           {connection.since ? formatTime(connection.since) : 'never seen'}
         </span>
+        {connection.protocolVersion && (
+          <span className="machine-card__proto">v{connection.protocolVersion}</span>
+        )}
       </div>
 
       <div className="machine-card__sessions">
@@ -152,6 +162,27 @@ function MachineCard({
           </p>
         )}
       </div>
+
+      {!revoked && (
+        <div className="machine-card__actions">
+          <button
+            type="button"
+            className="btn btn--sm btn--danger"
+            disabled={revokePending}
+            onClick={() => {
+              if (
+                window.confirm(
+                  `De-register "${machine.name}"? Its agent certificate is revoked and it can no longer connect.`,
+                )
+              ) {
+                onRevoke(machine.id, machine.name);
+              }
+            }}
+          >
+            {revokePending ? 'Revoking…' : 'De-register'}
+          </button>
+        </div>
+      )}
     </li>
   );
 }
@@ -182,6 +213,8 @@ export function StatusView({
   onStartManaged,
   startManagedPending,
   onEnrolled,
+  onRevokeMachine,
+  revokePendingId,
   questions,
   onAnswerQuestion,
   answerPendingId,
@@ -270,6 +303,8 @@ export function StatusView({
                 machine={m}
                 sessions={sessionsByMachine.get(m.id) ?? []}
                 onOpenSession={onOpenSession}
+                onRevoke={onRevokeMachine}
+                revokePending={revokePendingId === m.id}
               />
             ))}
           </ul>

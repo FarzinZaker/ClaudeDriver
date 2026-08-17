@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ackAlert,
+  revokeMachine,
   ALERTS_QUERY_KEY,
   answerQuestion,
   ApiError,
@@ -360,6 +361,13 @@ export default function App() {
     queryKey: searchQueryKey(searchTerm),
     queryFn: () => search(searchTerm),
     enabled: authenticated && searchTerm !== '',
+  });
+
+  const revokeMutation = useMutation({
+    mutationFn: (id: string) => revokeMachine(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: STATUS_QUERY_KEY });
+    },
   });
 
   const ackMutation = useMutation({
@@ -734,6 +742,8 @@ export default function App() {
         onEnrolled={() =>
           void queryClient.invalidateQueries({ queryKey: STATUS_QUERY_KEY })
         }
+        onRevokeMachine={(id) => revokeMutation.mutate(id)}
+        revokePendingId={revokeMutation.isPending ? revokeMutation.variables : null}
         questions={questions}
         onAnswerQuestion={(id, input) => answerMutation.mutate({ id, input })}
         answerPendingId={answerMutation.isPending ? answerMutation.variables.id : null}
