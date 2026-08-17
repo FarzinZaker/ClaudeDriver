@@ -17,6 +17,7 @@ import kotlinx.coroutines.CompletableDeferred
 import java.util.concurrent.ConcurrentHashMap
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
+import io.ktor.network.tls.addKeyStore
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.client.request.header
@@ -40,6 +41,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import java.io.File
+import java.security.KeyStore
 import java.time.Instant
 import kotlin.random.Random
 
@@ -59,6 +61,10 @@ private data class OutFrame(val type: String, val payload: JsonElement)
 class AgentClient(
     private val serverBaseUrl: String,
     private val storageDir: File,
+    // Where the outbound WSS connects. In prod this is the ALB's mTLS listener (…:8443), separate
+    // from serverBaseUrl (enrollment on :443, before any device cert exists). Defaults to the same
+    // host for local dev, where there is no ALB and no client-cert requirement.
+    private val connectBaseUrl: String = serverBaseUrl,
     private val agentVersion: String = "0.4.0",
     private val hookReceiverPort: Int = 8765,
     private val settingsFile: File = HookInstaller.defaultSettingsFile(),
@@ -68,7 +74,25 @@ class AgentClient(
     private var sessionController: SessionController? = null
     private var managedController: ManagedSessionController? = null
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-    private val http = HttpClient(CIO) { install(WebSockets) }
+
+    // Enrolled device cert + key, loaded as a client keystore for mutual TLS to the ALB. Null until
+    // enrollment has written the PEM files (the enroll request itself runs over the non-mTLS :443).
+    private val clientKeyStore: KeyStore? by lazy {
+        if (certFile.exists() && keyFile.exists()) {
+            runCatching { Crypto.clientKeyStore(keyFile.readText(), certFile.readText()) }.getOrNull()
+        } else null
+    }
+
+    private val http = HttpClient(CIO) {
+        install(WebSockets)
+        engine {
+            https {
+                // Present the device certificate when connecting to the ALB mTLS listener. The ALB
+                // server cert is publicly trusted (ACM), so no custom trust manager is needed.
+                clientKeyStore?.let { addKeyStore(it, Crypto.KEYSTORE_PASSWORD) }
+            }
+        }
+    }
     private val hookTokenEnvVar = "CLAUDEDRIVER_HOOK_TOKEN"
 
     // Outbound frames queued by the monitor/receiver, drained by the active session (single writer).
@@ -171,7 +195,7 @@ class AgentClient(
     }
 
     private suspend fun runSession(fingerprint: String) = coroutineScope {
-        val wsUrl = serverBaseUrl.replaceFirst("http", "ws") + "/agent/connect"
+        val wsUrl = connectBaseUrl.replaceFirst("http", "ws") + "/agent/connect"
         http.webSocket(urlString = wsUrl, request = { header("x-client-cert-fingerprint", fingerprint) }) {
             // Handshake first (guarantees hello is frame #1), then start the single writer.
             send(Frame.Text(Codec.encode(Codec.envelope(MessageType.HELLO, ++seq, Hello("agent-host", agentVersion)))))

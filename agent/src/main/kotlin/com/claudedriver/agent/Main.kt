@@ -9,13 +9,16 @@ import java.io.File
  *   enroll --machine-id <uuid> --code <code>   # obtain a device certificate
  *   (no args)                                  # connect and hold the outbound WSS
  *
- * Config via env: CLAUDEDRIVER_BACKEND_URL (default http://localhost:8080),
+ * Config via env: CLAUDEDRIVER_BACKEND_URL (default http://localhost:8080) — enrollment endpoint,
+ *                 CLAUDEDRIVER_AGENT_CONNECT_URL (default = backend URL) — outbound WSS; in prod
+ *                   this is the ALB mTLS listener, e.g. https://host:8443,
  *                 CLAUDEDRIVER_AGENT_DIR (default ./agent-data).
  */
 fun main(args: Array<String>) = runBlocking {
     val serverUrl = System.getenv("CLAUDEDRIVER_BACKEND_URL") ?: "http://localhost:8080"
+    val connectUrl = System.getenv("CLAUDEDRIVER_AGENT_CONNECT_URL") ?: serverUrl
     val storageDir = File(System.getenv("CLAUDEDRIVER_AGENT_DIR") ?: "agent-data")
-    val client = AgentClient(serverUrl, storageDir)
+    val client = AgentClient(serverUrl, storageDir, connectBaseUrl = connectUrl)
 
     if (args.isNotEmpty() && args[0] == "enroll") {
         val machineId = argValue(args, "--machine-id") ?: error("enroll requires --machine-id <uuid>")
