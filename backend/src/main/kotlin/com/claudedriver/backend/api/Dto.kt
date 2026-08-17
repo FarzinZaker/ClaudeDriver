@@ -8,6 +8,12 @@ import kotlinx.serialization.Serializable
 data class RegisterOptionsRequest(val bootstrapCode: String, val handle: String = "operator")
 
 @Serializable
+data class RegisterRequest(val username: String, val password: String, val bootstrapCode: String)
+
+@Serializable
+data class LoginRequest(val username: String, val password: String)
+
+@Serializable
 data class CreateMachineRequest(val name: String, val os: String)
 
 @Serializable

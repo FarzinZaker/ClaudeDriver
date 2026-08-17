@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AuthError, loginWithPasskey, registerPasskey } from '../auth/webauthn';
+import { AuthError, login, registerOperator } from '../auth/auth';
 
 interface Props {
   /** Called after a successful login or registration so the app can re-seed status. */
@@ -10,11 +10,13 @@ type Mode = 'login' | 'register';
 
 /**
  * Operator sign-in. Two modes:
- *  - Login: passkey assertion -> session cookie.
- *  - First-time register: bootstrap code + passkey creation (first operator only).
+ *  - Login: username + password.
+ *  - First-time register: username + password + bootstrap code (first operator only).
  */
 export function LoginPanel({ onAuthenticated }: Props) {
   const [mode, setMode] = useState<Mode>('login');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [bootstrapCode, setBootstrapCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -26,14 +28,7 @@ export function LoginPanel({ onAuthenticated }: Props) {
       await action();
       onAuthenticated();
     } catch (e) {
-      if (e instanceof AuthError) {
-        setError(e.message);
-      } else if (e instanceof DOMException) {
-        // navigator.credentials rejections (cancelled, timeout, etc.)
-        setError(e.message || 'Passkey request was cancelled');
-      } else {
-        setError('Unexpected error during authentication');
-      }
+      setError(e instanceof AuthError ? e.message : 'Unexpected error during authentication');
     } finally {
       setBusy(false);
     }
@@ -65,28 +60,37 @@ export function LoginPanel({ onAuthenticated }: Props) {
         </button>
       </div>
 
-      {mode === 'login' ? (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void run(loginWithPasskey);
-          }}
-        >
-          <p className="hint">Authenticate with your passkey.</p>
-          <button type="submit" className="btn btn--primary" disabled={busy}>
-            {busy ? 'Waiting for passkey…' : 'Sign in with passkey'}
-          </button>
-        </form>
-      ) : (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void run(() => registerPasskey(bootstrapCode.trim()));
-          }}
-        >
-          <p className="hint">
-            First operator only. Enter the bootstrap code, then create a passkey.
-          </p>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (mode === 'login') {
+            void run(() => login(username.trim(), password));
+          } else {
+            void run(() => registerOperator(username.trim(), password, bootstrapCode.trim()));
+          }
+        }}
+      >
+        <label className="field">
+          <span>Username</span>
+          <input
+            type="text"
+            autoComplete="username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            required
+          />
+        </label>
+        <label className="field">
+          <span>Password</span>
+          <input
+            type="password"
+            autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+          />
+        </label>
+        {mode === 'register' && (
           <label className="field">
             <span>Bootstrap code</span>
             <input
@@ -97,15 +101,29 @@ export function LoginPanel({ onAuthenticated }: Props) {
               required
             />
           </label>
-          <button
-            type="submit"
-            className="btn btn--primary"
-            disabled={busy || bootstrapCode.trim().length === 0}
-          >
-            {busy ? 'Creating passkey…' : 'Register passkey'}
-          </button>
-        </form>
-      )}
+        )}
+        <button
+          type="submit"
+          className="btn btn--primary"
+          disabled={
+            busy ||
+            username.trim().length === 0 ||
+            password.length === 0 ||
+            (mode === 'register' && bootstrapCode.trim().length === 0)
+          }
+        >
+          {busy
+            ? mode === 'login'
+              ? 'Signing in…'
+              : 'Creating account…'
+            : mode === 'login'
+              ? 'Sign in'
+              : 'Create operator'}
+        </button>
+        {mode === 'register' && (
+          <p className="hint">First operator only. Password must be at least 8 characters.</p>
+        )}
+      </form>
 
       {error && (
         <p className="error" role="alert">

@@ -31,7 +31,7 @@ import {
   type AnswerInput,
   type ControlResult,
 } from './api';
-import { logout } from './auth/webauthn';
+import { logout } from './auth/auth';
 import { LoginPanel } from './components/LoginPanel';
 import { SessionDetailModal } from './components/SessionDetail';
 import { StatusView } from './components/StatusView';

@@ -12,6 +12,7 @@ import org.jetbrains.exposed.sql.javatime.timestamp
 object Operators : Table("operator") {
     val id = uuid("id")
     val handle = text("handle")
+    val passwordHash = text("password_hash").nullable()
     val createdAt = timestamp("created_at")
     val status = text("status")
     override val primaryKey = PrimaryKey(id)

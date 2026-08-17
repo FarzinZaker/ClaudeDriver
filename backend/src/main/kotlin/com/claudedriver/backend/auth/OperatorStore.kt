@@ -43,6 +43,48 @@ class OperatorStore(private val db: Database) {
         id
     }
 
+    /** An operator row with its bcrypt password hash (username = handle). */
+    data class OperatorRecord(val id: UUID, val handle: String, val passwordHash: String?)
+
+    /** True once an operator with a password exists (a username/password account has been set up). */
+    fun passwordOperatorExists(): Boolean = transaction(db) {
+        Operators.selectAll().where { Operators.passwordHash.isNotNull() }.limit(1).any()
+    }
+
+    /**
+     * Set up the username/password operator. If a legacy (passwordless, e.g. former passkey) operator
+     * row exists, claim it — rename to [handle] and set the password — so foreign keys stay intact;
+     * otherwise insert a fresh operator. Returns the operator id.
+     */
+    fun claimOrCreateOperator(handle: String, passwordHash: String): UUID = transaction(db) {
+        val existing = Operators.selectAll().limit(1)
+            .map { it[Operators.id] }.firstOrNull()
+        if (existing != null) {
+            Operators.update({ Operators.id eq existing }) {
+                it[Operators.handle] = handle
+                it[Operators.passwordHash] = passwordHash
+                it[status] = "active"
+            }
+            existing
+        } else {
+            val id = UUID.randomUUID()
+            Operators.insert {
+                it[Operators.id] = id
+                it[Operators.handle] = handle
+                it[Operators.passwordHash] = passwordHash
+                it[createdAt] = Instant.now()
+                it[status] = "active"
+            }
+            id
+        }
+    }
+
+    fun findByHandle(handle: String): OperatorRecord? = transaction(db) {
+        Operators.selectAll().where { Operators.handle eq handle }
+            .map { OperatorRecord(it[Operators.id], it[Operators.handle], it[Operators.passwordHash]) }
+            .firstOrNull()
+    }
+
     fun addCredential(operatorId: UUID, credentialId: ByteArray, publicKeyCose: ByteArray, signCount: Long) =
         transaction(db) {
             WebAuthnCredentials.insert {

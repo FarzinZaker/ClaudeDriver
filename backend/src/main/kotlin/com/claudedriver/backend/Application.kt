@@ -3,7 +3,7 @@ package com.claudedriver.backend
 import com.claudedriver.backend.api.StatusService
 import com.claudedriver.backend.audit.AuditRepository
 import com.claudedriver.backend.auth.OperatorStore
-import com.claudedriver.backend.auth.WebAuthnService
+import com.claudedriver.backend.auth.PasswordAuthService
 import com.claudedriver.backend.ca.DeviceCa
 import com.claudedriver.backend.config.Config
 import com.claudedriver.backend.connection.TrustService
@@ -49,7 +49,7 @@ class AppDeps(
     val database: Database,
     val audit: AuditRepository,
     val ca: DeviceCa,
-    val webAuthn: WebAuthnService,
+    val passwordAuth: PasswordAuthService,
     val enrollment: EnrollmentService,
     val trust: TrustService,
     val status: StatusService,
@@ -101,7 +101,7 @@ class AppDeps(
                 database = database,
                 audit = audit,
                 ca = ca,
-                webAuthn = WebAuthnService(config, operatorStore),
+                passwordAuth = PasswordAuthService(operatorStore),
                 enrollment = EnrollmentService(database, ca, audit),
                 trust = TrustService(database),
                 status = StatusService(database, hub),

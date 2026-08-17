@@ -7,6 +7,8 @@ import com.claudedriver.backend.api.CreateMachineResponse
 import com.claudedriver.backend.api.EnrollmentApprovedResponse
 import com.claudedriver.backend.api.ErrorResponse
 import com.claudedriver.backend.api.RegisterOptionsRequest
+import com.claudedriver.backend.api.RegisterRequest
+import com.claudedriver.backend.api.LoginRequest
 import com.claudedriver.backend.api.WhoAmIResponse
 import com.claudedriver.backend.api.AlertsResponse
 import com.claudedriver.backend.api.ApprovalsResponse
@@ -128,10 +130,11 @@ fun Application.configureRouting(deps: AppDeps) = routing {
         }
     }
 
-    // ---- Operator WebAuthn (self-hosted passkeys) ----
-    post("/auth/register/options") {
-        val req = call.receive<RegisterOptionsRequest>()
-        if (deps.operatorStore.operatorExists()) {
+    // ---- Operator username + password auth ----
+    // First-operator registration, gated by the bootstrap code and allowed only once.
+    post("/auth/register") {
+        val req = call.receive<RegisterRequest>()
+        if (deps.operatorStore.passwordOperatorExists()) {
             call.respond(HttpStatusCode.Forbidden, ErrorResponse("already_registered", "An operator already exists"))
             return@post
         }
@@ -140,41 +143,24 @@ fun Application.configureRouting(deps: AppDeps) = routing {
             call.respond(HttpStatusCode.Forbidden, ErrorResponse("bad_bootstrap", "Invalid bootstrap code"))
             return@post
         }
-        val challenge = deps.webAuthn.startRegistration(req.handle)
-        call.sessions.set(ChallengeSession(challenge.token))
-        call.respondText(challenge.json, ContentType.Application.Json)
-    }
-
-    post("/auth/register/verify") {
-        val token = call.sessions.get<ChallengeSession>()?.token
-            ?: return@post call.respond(HttpStatusCode.BadRequest, ErrorResponse("no_challenge", "No pending registration"))
-        val body = call.receiveText()
-        val auth = deps.webAuthn.finishRegistration(token, body)
+        val username = req.username.trim()
+        if (username.isEmpty() || req.password.length < 8) {
+            call.respond(HttpStatusCode.BadRequest, ErrorResponse("invalid", "Username required and password must be at least 8 characters"))
+            return@post
+        }
+        val auth = deps.passwordAuth.register(username, req.password)
         call.sessions.set(OperatorSession(auth.operatorId.toString(), auth.handle))
-        call.sessions.clear<ChallengeSession>()
         deps.audit.append(auth.handle, AuditAction.AUTH_SUCCESS, "registration")
         call.respond(HttpStatusCode.Created, WhoAmIResponse(auth.operatorId.toString(), "active"))
     }
 
-    post("/auth/login/options") {
-        val challenge = try {
-            deps.webAuthn.startAssertion()
-        } catch (e: IllegalStateException) {
-            return@post call.respond(HttpStatusCode.BadRequest, ErrorResponse("no_operator", e.message ?: "No operator"))
-        }
-        call.sessions.set(ChallengeSession(challenge.token))
-        call.respondText(challenge.json, ContentType.Application.Json)
-    }
-
-    post("/auth/login/verify") {
-        val token = call.sessions.get<ChallengeSession>()?.token
-            ?: return@post call.respond(HttpStatusCode.BadRequest, ErrorResponse("no_challenge", "No pending login"))
-        val body = call.receiveText()
-        val auth = try {
-            deps.webAuthn.finishAssertion(token, body)
-        } catch (e: Exception) {
+    post("/auth/login") {
+        val req = call.receive<LoginRequest>()
+        val auth = deps.passwordAuth.login(req.username.trim(), req.password)
+        if (auth == null) {
             deps.audit.append("anonymous", AuditAction.AUTH_FAILURE, "login")
-            return@post call.respond(HttpStatusCode.Unauthorized, ErrorResponse("auth_failed", "Login failed"))
+            call.respond(HttpStatusCode.Unauthorized, ErrorResponse("auth_failed", "Invalid username or password"))
+            return@post
         }
         call.sessions.set(OperatorSession(auth.operatorId.toString(), auth.handle))
         deps.audit.append(auth.handle, AuditAction.AUTH_SUCCESS, "login")
