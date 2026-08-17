@@ -61,9 +61,12 @@ import io.ktor.server.request.receiveText
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondFile
 import io.ktor.server.response.respondText
+import io.ktor.server.response.respondOutputStream
 import io.ktor.server.response.header
 import io.ktor.http.HttpHeaders
 import io.ktor.http.ContentDisposition
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import io.ktor.server.routing.RoutingContext
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
@@ -210,6 +213,41 @@ fun Application.configureRouting(deps: AppDeps) = routing {
         val id = UUID.fromString(call.parameters["id"])
         deps.enrollment.revokeMachine(id, op.handle)
         call.respond(HttpStatusCode.NoContent)
+    }
+
+    // Per-machine, self-contained installer: mints a fresh enrollment code, then streams a package
+    // = the OS runtime (bundled JRE) + agent.config (endpoints + code) + an always-on install script.
+    get("/machines/{id}/installer") {
+        val op = requireOperator(deps) ?: return@get
+        if (!deps.installer.configured) {
+            call.respond(
+                HttpStatusCode.ServiceUnavailable,
+                ErrorResponse("no_runtimes", "Installer packaging is not configured on this server"),
+            )
+            return@get
+        }
+        val id = UUID.fromString(call.parameters["id"])
+        val os = call.request.queryParameters["os"] ?: "macos"
+        val target = deps.installer.targetFor(os)
+            ?: return@get call.respond(HttpStatusCode.BadRequest, ErrorResponse("bad_os", "Unsupported OS: $os"))
+
+        val approved = deps.enrollment.approveEnrollment(id, op.handle)
+        val configJson = buildJsonObject {
+            put("backendUrl", deps.config.agentPublicUrl)
+            put("connectUrl", deps.config.agentConnectUrl)
+            put("machineId", id.toString())
+            put("enrollmentCode", approved.code)
+        }.toString()
+
+        call.response.header(
+            HttpHeaders.ContentDisposition,
+            ContentDisposition.Attachment
+                .withParameter(ContentDisposition.Parameters.FileName, target.filename)
+                .toString(),
+        )
+        call.respondOutputStream(ContentType.Application.Zip) {
+            deps.installer.writeInstaller(os, configJson, this)
+        }
     }
 
     // ---- Operator: monitoring (sessions & alerts) ----

@@ -10,6 +10,7 @@ import com.claudedriver.backend.connection.TrustService
 import com.claudedriver.backend.approvals.ApprovalService
 import com.claudedriver.backend.control.ControlService
 import com.claudedriver.backend.enrollment.EnrollmentService
+import com.claudedriver.backend.installer.InstallerService
 import com.claudedriver.backend.managed.ManagedService
 import com.claudedriver.backend.monitoring.AlertService
 import com.claudedriver.backend.monitoring.AttentionClassifier
@@ -61,6 +62,7 @@ class AppDeps(
     val devices: DeviceStore,
     val control: ControlService,
     val managed: ManagedService,
+    val installer: InstallerService,
 ) {
     companion object {
         fun create(config: Config, database: Database): AppDeps {
@@ -112,6 +114,7 @@ class AppDeps(
                 devices = devices,
                 control = control,
                 managed = managed,
+                installer = InstallerService(config.agentRuntimesBucket),
             )
         }
     }

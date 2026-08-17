@@ -21,6 +21,11 @@ data class Config(
     val caKeyPath: String? = null,
     val caCertPem: String? = null,
     val caKeyPem: String? = null,
+    // Endpoints embedded into per-machine agent installers, and the S3 bucket holding the
+    // self-contained per-OS agent runtimes the backend wraps.
+    val agentPublicUrl: String = "http://localhost:8080",
+    val agentConnectUrl: String = "http://localhost:8080",
+    val agentRuntimesBucket: String? = null,
 ) {
     companion object {
         private fun required(name: String): String {
@@ -31,6 +36,14 @@ data class Config(
 
         private fun optional(name: String, default: String): String =
             System.getenv(name)?.takeIf { it.isNotBlank() } ?: default
+
+        /** Derive the agent mTLS connect URL (…:8443) from the public origin unless overridden. */
+        private fun deriveConnectUrl(origin: String): String =
+            runCatching {
+                val u = java.net.URI(origin)
+                val scheme = u.scheme ?: "https"
+                "$scheme://${u.host}:8443"
+            }.getOrDefault(origin)
 
         fun fromEnv(): Config {
             val env = optional("CLAUDEDRIVER_ENV", "dev")
@@ -55,6 +68,12 @@ data class Config(
                 caKeyPath = System.getenv("CA_KEY_PATH")?.takeIf { it.isNotBlank() },
                 caCertPem = System.getenv("CA_CERT_PEM")?.takeIf { it.isNotBlank() },
                 caKeyPem = System.getenv("CA_KEY_PEM")?.takeIf { it.isNotBlank() },
+                agentPublicUrl = optional("AGENT_PUBLIC_URL", optional("WEBAUTHN_ORIGIN", "http://localhost:8080")),
+                agentConnectUrl = optional(
+                    "AGENT_CONNECT_URL",
+                    deriveConnectUrl(optional("WEBAUTHN_ORIGIN", "http://localhost:8080")),
+                ),
+                agentRuntimesBucket = System.getenv("AGENT_RUNTIMES_BUCKET")?.takeIf { it.isNotBlank() },
             )
         }
     }

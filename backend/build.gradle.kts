@@ -30,6 +30,14 @@ dependencies {
     implementation(libs.bouncycastle.pkix)
     implementation(libs.webauthn.core)
 
+    // S3 (fetch the per-OS agent runtime to assemble per-machine installers). The URL-connection
+    // HTTP client avoids pulling the async Netty client that would clash with Ktor's server engine.
+    implementation(libs.aws.s3) {
+        exclude(group = "software.amazon.awssdk", module = "netty-nio-client")
+        exclude(group = "software.amazon.awssdk", module = "apache-client")
+    }
+    implementation(libs.aws.url.connection.client)
+
     implementation(libs.logback)
 
     testImplementation(project(":agent"))
