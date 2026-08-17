@@ -51,6 +51,18 @@ class SessionRegistry(
             val existing = Sessions.selectAll().where {
                 (Sessions.machineId eq machineId) and (Sessions.claudeSessionId eq event.claudeSessionId)
             }.firstOrNull()
+                // Adopt a session that process-detection created for this project (proc:<cwd>) so the
+                // detected process and the hook session are one, not two.
+                ?: event.projectPath?.takeIf { it.isNotBlank() }?.let { proj ->
+                    Sessions.selectAll().where {
+                        (Sessions.machineId eq machineId) and (Sessions.projectPath eq proj) and
+                            (Sessions.claudeSessionId like "proc:%")
+                    }.firstOrNull()?.also { row ->
+                        Sessions.update({ Sessions.id eq row[Sessions.id] }) {
+                            it[claudeSessionId] = event.claudeSessionId
+                        }
+                    }
+                }
 
             val sessionId: UUID
             val prevState: SessionState
@@ -108,17 +120,48 @@ class SessionRegistry(
      * `process_present` — true when a matching claude process runs in the session's project.
      */
     suspend fun applyProcessSnapshot(machineId: UUID, snapshot: ProcessSnapshot) {
-        val liveCwds = snapshot.processes.mapNotNull { it.projectPath }.toSet()
+        val liveCwds = snapshot.processes.mapNotNull { it.projectPath?.takeIf { p -> p.isNotBlank() } }.toSet()
+        val now = Instant.now()
         val updates = transaction(db) {
-            Sessions.selectAll().where { Sessions.machineId eq machineId }.mapNotNull { s ->
-                val present = s[Sessions.projectPath] != null && s[Sessions.projectPath] in liveCwds
-                if (present == s[Sessions.processPresent]) return@mapNotNull null
-                Sessions.update({ Sessions.id eq s[Sessions.id] }) { it[processPresent] = present }
-                SessionUpdate(
-                    s[Sessions.id].toString(), machineId.toString(), s[Sessions.projectPath],
-                    s[Sessions.state], s[Sessions.lastActivityAt].toString(), present,
-                )
+            val out = mutableListOf<SessionUpdate>()
+            val known = Sessions.selectAll().where { Sessions.machineId eq machineId }.toList()
+            val knownCwds = known.mapNotNull { it[Sessions.projectPath] }.toSet()
+
+            // A detected Claude Code process with no session yet becomes a running session, keyed by
+            // its working directory ("proc:<cwd>") until a hook event supplies the real session id.
+            for (cwd in liveCwds - knownCwds) {
+                val id = UUID.randomUUID()
+                Sessions.insert {
+                    it[Sessions.id] = id
+                    it[Sessions.machineId] = machineId
+                    it[claudeSessionId] = "proc:$cwd"
+                    it[projectPath] = cwd
+                    it[state] = SessionState.RUNNING.wire
+                    it[lastActivityAt] = now
+                    it[processPresent] = true
+                    it[createdAt] = now
+                }
+                out += SessionUpdate(id.toString(), machineId.toString(), cwd, SessionState.RUNNING.wire, now.toString(), true)
             }
+
+            for (s in known) {
+                val proj = s[Sessions.projectPath]
+                val present = proj != null && proj in liveCwds
+                if (present) {
+                    // Keep a present session fresh so the staleness sweep doesn't retire it.
+                    Sessions.update({ Sessions.id eq s[Sessions.id] }) {
+                        it[processPresent] = true
+                        it[lastActivityAt] = now
+                    }
+                    if (!s[Sessions.processPresent]) {
+                        out += SessionUpdate(s[Sessions.id].toString(), machineId.toString(), proj, s[Sessions.state], now.toString(), true)
+                    }
+                } else if (s[Sessions.processPresent]) {
+                    Sessions.update({ Sessions.id eq s[Sessions.id] }) { it[processPresent] = false }
+                    out += SessionUpdate(s[Sessions.id].toString(), machineId.toString(), proj, s[Sessions.state], s[Sessions.lastActivityAt].toString(), false)
+                }
+            }
+            out
         }
         updates.forEach { publisher.sessionUpdate(it) }
     }

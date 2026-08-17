@@ -4,8 +4,12 @@ import com.claudedriver.backend.audit.AuditRepository
 import com.claudedriver.backend.config.Config
 import com.claudedriver.backend.persistence.Db
 import com.claudedriver.backend.persistence.Machines
+import com.claudedriver.backend.persistence.Sessions
 import com.claudedriver.backend.ws.OperatorHub
 import com.claudedriver.protocol.ActivityEvent
+import com.claudedriver.protocol.DetectedProcess
+import com.claudedriver.protocol.ProcessSnapshot
+import org.jetbrains.exposed.sql.selectAll
 import kotlinx.coroutines.runBlocking
 import org.jetbrains.exposed.sql.Database
 import org.jetbrains.exposed.sql.insert
@@ -64,6 +68,33 @@ class MonitoringIntegrationTest {
 
     private fun event(sid: String, kind: String, notif: String? = null) =
         ActivityEvent(sid, kind, notif, "/proj", "summary", "{}", Instant.now().toString())
+
+    @Test
+    fun `a detected process becomes a running session and a later hook reconciles it`() = runBlocking {
+        val machineId = newMachine()
+        registry.applyProcessSnapshot(
+            machineId,
+            ProcessSnapshot(listOf(DetectedProcess(1234L, null, "/work/repo", Instant.now().toString()))),
+        )
+        val afterProc = transaction(db) {
+            Sessions.selectAll().where { Sessions.machineId eq machineId }
+                .map { Triple(it[Sessions.claudeSessionId], it[Sessions.state], it[Sessions.processPresent]) }
+        }
+        assertEquals(1, afterProc.size, "process detection should create a session")
+        assertTrue(afterProc[0].first.startsWith("proc:"))
+        assertTrue(afterProc[0].third, "processPresent")
+        assertEquals(SessionState.RUNNING.wire, afterProc[0].second)
+
+        // A hook event for the same project adopts that session instead of duplicating it.
+        registry.applyActivityEvent(
+            machineId,
+            ActivityEvent("real-sid-1", "activity", null, "/work/repo", "did a thing", "{}", Instant.now().toString()),
+        )
+        val afterHook = transaction(db) {
+            Sessions.selectAll().where { Sessions.machineId eq machineId }.map { it[Sessions.claudeSessionId] }
+        }
+        assertEquals(listOf("real-sid-1"), afterHook, "hook should reconcile, not duplicate")
+    }
 
     @Test
     fun `a needs-attention wait raises exactly one alert and auto-resolves when answered`() = runBlocking {
