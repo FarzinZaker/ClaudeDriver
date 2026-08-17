@@ -128,6 +128,9 @@ class AgentClient(
         outbound.trySend(OutFrame(type, Codec.json.encodeToJsonElement(payload)))
     }
 
+    /** True once a device certificate + key have been persisted (enrollment completed). */
+    fun isEnrolled(): Boolean = certFile.exists() && keyFile.exists()
+
     /** Enroll with a one-time code + a fresh CSR; persist the issued certificate + key. */
     suspend fun enroll(machineId: String, code: String) {
         storageDir.mkdirs()
