@@ -60,7 +60,7 @@ export interface OperatorWsOptions extends OperatorWsCallbacks {
 }
 
 /** Resolves the operator WS URL from the current page origin (proxied at `/ws`). */
-export function operatorWsUrl(path = '/ws'): string {
+export function operatorWsUrl(path = '/ws/operator'): string {
   if (typeof window === 'undefined') return path;
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${window.location.host}${path}`;
