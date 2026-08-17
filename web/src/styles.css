@@ -1305,3 +1305,17 @@ h2 {
   background: #c0392b;
   color: #fff;
 }
+
+/* --- Installer download --- */
+.enroll__download {
+  display: inline-block;
+  margin: 0.25rem 0 0.75rem;
+  text-decoration: none;
+}
+.machine-card__actions {
+  gap: 0.5rem;
+  align-items: center;
+}
+.machine-card__actions .btn {
+  text-decoration: none;
+}

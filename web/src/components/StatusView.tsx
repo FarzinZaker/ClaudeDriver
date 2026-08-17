@@ -165,6 +165,12 @@ function MachineCard({
 
       {!revoked && (
         <div className="machine-card__actions">
+          <a
+            className="btn btn--sm btn--ghost"
+            href={`/machines/${encodeURIComponent(machine.id)}/installer?os=${machine.os}`}
+          >
+            Installer
+          </a>
           <button
             type="button"
             className="btn btn--sm btn--danger"

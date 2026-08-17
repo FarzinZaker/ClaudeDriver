@@ -87,6 +87,16 @@ data "aws_iam_policy_document" "task_runtime" {
     ]
     resources = ["${aws_cloudwatch_log_group.backend.arn}:*"]
   }
+
+  # Read the self-contained per-OS agent runtimes the backend wraps into per-machine installers.
+  dynamic "statement" {
+    for_each = var.agent_runtimes_bucket == "" ? [] : [1]
+    content {
+      sid       = "ReadAgentRuntimes"
+      actions   = ["s3:GetObject"]
+      resources = ["arn:aws:s3:::${var.agent_runtimes_bucket}/*"]
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "task_runtime" {

@@ -7,11 +7,6 @@ interface Props {
   onEnrolled: () => void;
 }
 
-/** Backend origin (enrollment, :443) and the agent mTLS connect endpoint (:8443). */
-const BACKEND_URL = window.location.origin;
-const CONNECT_URL = `${window.location.protocol}//${window.location.hostname}:8443`;
-const DOWNLOAD_URL = `${window.location.origin}/download/agent.zip`;
-
 /**
  * Register a new machine and hand back a one-time enrollment code plus the exact
  * commands to install and run the agent on that machine (Windows or macOS/Linux).
@@ -49,12 +44,6 @@ export function EnrollMachinePanel({ onEnrolled }: Props) {
     setError(null);
   }
 
-  const bin = os === 'windows' ? 'bin\\agent.bat' : 'bin/agent';
-  const setEnv =
-    os === 'windows'
-      ? `set CLAUDEDRIVER_BACKEND_URL=${BACKEND_URL}\r\nset CLAUDEDRIVER_AGENT_CONNECT_URL=${CONNECT_URL}`
-      : `export CLAUDEDRIVER_BACKEND_URL=${BACKEND_URL}\nexport CLAUDEDRIVER_AGENT_CONNECT_URL=${CONNECT_URL}`;
-
   return (
     <section className="enroll card" aria-labelledby="enroll-heading">
       <h2 id="enroll-heading">Enroll a machine</h2>
@@ -62,28 +51,30 @@ export function EnrollMachinePanel({ onEnrolled }: Props) {
       {ticket ? (
         <div className="enroll__result">
           <p className="hint">
-            Machine registered. Install the agent on the target machine and enroll it with the
-            one-time code below (expires {new Date(ticket.expiresAt).toLocaleString()}).
+            <strong>{name || 'Machine'}</strong> registered. Download its pre-configured installer,
+            run it on the target machine, and it installs an always-on service and connects
+            automatically — no terminal, no code to type (embedded code expires{' '}
+            {new Date(ticket.expiresAt).toLocaleString()}).
           </p>
+
+          <a
+            className="btn btn--primary enroll__download"
+            href={`/machines/${encodeURIComponent(ticket.machineId)}/installer?os=${os}`}
+          >
+            Download installer for {os === 'windows' ? 'Windows' : 'macOS'}
+          </a>
 
           <ol className="enroll__steps">
             <li>
-              <strong>Download the agent</strong> onto the machine:{' '}
-              <a href={DOWNLOAD_URL}>agent.zip</a> — unzip it. Requires <strong>Java 21+</strong>.
+              Unzip the download and run{' '}
+              <code>{os === 'windows' ? 'install.ps1' : 'install.command'}</code>
+              {os === 'windows'
+                ? ' (right-click → Run with PowerShell).'
+                : ' (double-click, or run it in Terminal).'}
             </li>
             <li>
-              <strong>Set the server endpoints:</strong>
-              <pre className="enroll__cmd">{setEnv}</pre>
-            </li>
-            <li>
-              <strong>Enroll</strong> (redeems the code for a device certificate):
-              <pre className="enroll__cmd">
-                {`${bin} enroll --machine-id ${ticket.machineId} --code ${ticket.enrollmentCode}`}
-              </pre>
-            </li>
-            <li>
-              <strong>Run</strong> the agent (detects your Claude Code processes and connects):
-              <pre className="enroll__cmd">{bin}</pre>
+              The agent installs as a background service, auto-enrolls, and this machine appears above
+              with live health. Self-contained — <strong>no Java required</strong>.
             </li>
           </ol>
 

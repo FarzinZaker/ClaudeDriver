@@ -60,6 +60,12 @@ variable "monthly_budget_limit_usd" {
   default     = "50"
 }
 
+variable "agent_runtimes_bucket" {
+  description = "S3 bucket holding the self-contained per-OS agent runtimes the backend wraps into per-machine installers. Empty disables the installer endpoint."
+  type        = string
+  default     = ""
+}
+
 variable "enable_budget" {
   description = "Whether to create the AWS Budget. Must be false when deploying into a linked/member account of an Organization (only the payer account can create budgets); create the tag-scoped budget in the payer account instead."
   type        = bool

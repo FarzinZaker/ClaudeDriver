@@ -36,7 +36,7 @@ resource "aws_ecs_task_definition" "backend" {
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
   cpu                      = "256"
-  memory                   = "512"
+  memory                   = "1024"
   execution_role_arn       = aws_iam_role.ecs_execution.arn
   task_role_arn            = aws_iam_role.ecs_task.arn
 
@@ -64,7 +64,8 @@ resource "aws_ecs_task_definition" "backend" {
         { name = "BACKEND_PORT", value = tostring(var.backend_container_port) },
         { name = "WEBAUTHN_RP_ID", value = var.domain_name },
         { name = "WEBAUTHN_RP_NAME", value = "ClaudeDriver" },
-        { name = "WEBAUTHN_ORIGIN", value = "https://${var.domain_name}" }
+        { name = "WEBAUTHN_ORIGIN", value = "https://${var.domain_name}" },
+        { name = "AGENT_RUNTIMES_BUCKET", value = var.agent_runtimes_bucket }
       ]
 
       # Secrets injected from SSM Parameter Store at task start (D8).

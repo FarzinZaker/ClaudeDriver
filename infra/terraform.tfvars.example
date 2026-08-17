@@ -6,13 +6,18 @@ environment = "prod"
 aws_region  = "us-east-1"
 
 # --- YOU FILL THESE (see RUNBOOK steps 1, 3, 4) ---
-domain_name               = "REPLACE_ME.yourdomain.com"                                    # the subdomain the backend serves
-acm_certificate_arn       = "arn:aws:acm:us-east-1:REPLACE_ACCOUNT_ID:certificate/REPLACE" # from `aws acm request-certificate`
-agent_ca_bundle_s3_bucket = "REPLACE_ME-claudedriver-trust"                                # S3 bucket holding ca.crt
+domain_name               = "claudedriver.resortwise.ai"                                    # the subdomain the backend serves
+acm_certificate_arn       = "arn:aws:acm:us-east-1:612990353705:certificate/f9890b3f-8ed4-446e-ac70-95a3932f72db"
+agent_ca_bundle_s3_bucket = "612990353705-claudedriver-trust"                              # S3 bucket holding ca.crt
 agent_ca_bundle_s3_key    = "ca.crt"
-container_image           = "REPLACE_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/claudedriver-backend:latest"
+agent_runtimes_bucket     = "612990353705-claudedriver-agent-runtimes"                     # per-OS agent runtimes for installers
+container_image           = "612990353705.dkr.ecr.us-east-1.amazonaws.com/claudedriver-backend:latest"
 
 # --- Budget / DB (defaults are fine) ---
+# 612990353705 is a linked/member account — only the payer account can create AWS Budgets,
+# so the budget is disabled here. Create the Project=ClaudeDriver tag-scoped budget in the
+# payer account (5544-2362-7502) instead. Cost tracking still works via tags + Resource Group.
+enable_budget             = false
 budget_notification_email = "you@example.com"
 monthly_budget_limit_usd  = 75
 db_username               = "claudedriver"
