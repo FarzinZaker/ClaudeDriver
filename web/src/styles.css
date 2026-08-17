@@ -914,3 +914,342 @@ h2 {
     gap: 3px;
   }
 }
+
+/* ========================================================================== */
+/* Phase 4 — Full interactive control (questions, transcript, search)         */
+/* ========================================================================== */
+
+/* Cross-session search ---------------------------------------------------- */
+.search {
+  margin-top: 4px;
+}
+.search__form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.search__label {
+  margin: 0;
+}
+.search__row {
+  display: flex;
+  gap: 8px;
+}
+.search__input {
+  flex: 1;
+  font: inherit;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+}
+.search__btn {
+  width: auto;
+  flex-shrink: 0;
+}
+.search__results {
+  margin-top: 10px;
+}
+.search-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.search-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.search-item__btn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: none;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-radius: var(--radius);
+}
+.search-item__btn:hover {
+  background: var(--surface-2);
+}
+.search-item__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+}
+.search-item__machine {
+  font-weight: 600;
+}
+.search-item__role {
+  color: var(--accent);
+}
+.search-item__at {
+  color: var(--muted);
+  margin-left: auto;
+  font-size: 0.74rem;
+}
+.search-item__snippet {
+  font-size: 0.88rem;
+  color: var(--text);
+}
+
+/* Questions inbox --------------------------------------------------------- */
+.questions {
+  margin-top: 8px;
+}
+.question-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.question-card {
+  padding: 14px 16px;
+}
+.question-card--pending {
+  /* A pending free-form question BLOCKS a real managed session — make it read
+     as urgent, stronger than a routine approval. */
+  border-left: 5px solid var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+  box-shadow:
+    var(--shadow),
+    0 0 0 1px color-mix(in srgb, var(--danger) 40%, transparent);
+}
+.question-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.question-card__machine {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.question-card__session {
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.82rem;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+.question-card__at {
+  margin-left: auto;
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+.question-card__text {
+  margin: 0 0 10px;
+  font-size: 0.98rem;
+  font-weight: 500;
+  line-height: 1.4;
+}
+.question-card__text--sm {
+  font-size: 0.85rem;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.question-card__field {
+  margin-bottom: 10px;
+}
+.question-card__field textarea,
+.inline-question__input {
+  width: 100%;
+  font: inherit;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  resize: vertical;
+}
+.question-card__note {
+  display: block;
+  font-size: 0.82rem;
+  color: var(--warn);
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.question-card__actions {
+  display: flex;
+  gap: 8px;
+}
+.question-card__send {
+  width: auto;
+}
+
+.badge--managed {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  margin-left: 10px;
+  vertical-align: middle;
+}
+.badge--question-pending {
+  color: var(--danger);
+  background: var(--danger-bg);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+.badge--question-answered {
+  color: var(--ok);
+  background: var(--ok-bg);
+}
+.badge--question-cancelled {
+  color: var(--muted);
+  background: var(--surface-2);
+}
+.badge--question-unanswered {
+  color: var(--warn);
+  background: var(--warn-bg);
+}
+
+.question-list--resolved {
+  margin-top: 10px;
+  gap: 6px;
+}
+.question-card--resolved {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  opacity: 0.7;
+  font-size: 0.85rem;
+}
+.question-card--resolved .question-card__at {
+  margin-left: auto;
+}
+
+/* Inline question (in the session detail modal) --------------------------- */
+.session-detail__questions {
+  margin-top: 16px;
+}
+.inline-question {
+  border-left: 5px solid var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+.inline-question__text {
+  margin: 8px 0;
+  font-weight: 500;
+}
+.inline-question__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* Managed transcript ------------------------------------------------------ */
+.transcript {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.transcript-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.transcript-msg {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 4px 10px;
+  align-items: baseline;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.transcript-msg__role {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.transcript-msg--assistant {
+  border-left: 3px solid var(--accent);
+}
+.transcript-msg--assistant .transcript-msg__role {
+  color: var(--accent);
+}
+.transcript-msg--user {
+  border-left: 3px solid var(--ok);
+}
+.transcript-msg--tool {
+  border-left: 3px solid var(--warn);
+}
+.transcript-msg__text {
+  grid-column: 2 / 3;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.transcript-msg__at {
+  grid-column: 3 / 4;
+  font-size: 0.72rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Managed-mode checkbox in the start-run form ----------------------------- */
+.checkbox-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 16px;
+  font-size: 0.85rem;
+  color: var(--text);
+  cursor: pointer;
+}
+.checkbox-field input {
+  margin-top: 2px;
+}
+
+@media (max-width: 640px) {
+  .question-card__actions,
+  .inline-question__actions {
+    justify-content: flex-end;
+  }
+  .transcript-msg {
+    grid-template-columns: 1fr;
+  }
+  .transcript-msg__text,
+  .transcript-msg__at {
+    grid-column: 1 / 2;
+  }
+}

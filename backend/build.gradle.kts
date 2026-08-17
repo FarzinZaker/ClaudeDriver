@@ -52,4 +52,8 @@ kotlin {
 
 tasks.test {
     useJUnitPlatform()
+    // Forward the opt-in live-smoke DB config to the forked test JVM (works under --no-daemon).
+    listOf("SMOKE_DB_URL", "SMOKE_DB_USER", "SMOKE_DB_PASS").forEach { key ->
+        System.getenv(key)?.let { environment(key, it) }
+    }
 }

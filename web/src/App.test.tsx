@@ -10,10 +10,13 @@ import type {
   ControlCommandSummary,
   ControlEventPayload,
   Envelope,
+  QuestionEventPayload,
+  QuestionSummary,
   SampleEventPayload,
   SessionSummary,
   SessionUpdatePayload,
   StatusResponse,
+  TranscriptEventPayload,
 } from './types';
 import { MockWebSocket } from './test/mockWebSocket';
 
@@ -50,11 +53,14 @@ const SESSION_WAITING = 'aaaaaaaa-0000-0000-0000-000000000002';
 
 const APPROVAL_ID = 'dddddddd-0000-0000-0000-000000000001';
 const COMMAND_ID = 'eeeeeeee-0000-0000-0000-000000000001';
+const QUESTION_ID = 'ffffffff-0000-0000-0000-000000000001';
 
 let SESSIONS: SessionSummary[];
 let ALERTS: AlertSummary[];
 let APPROVALS: ApprovalSummary[];
 let COMMANDS: ControlCommandSummary[];
+let QUESTIONS: QuestionSummary[];
+let TRANSCRIPT: { role: string; text: string; at: string }[];
 
 function makeApprovals(): ApprovalSummary[] {
   return [
@@ -85,6 +91,22 @@ function makeCommands(): ControlCommandSummary[] {
       status: 'pending',
       createdAt: '2026-08-16T12:00:35Z',
       message: null,
+    },
+  ];
+}
+
+function makeQuestions(): QuestionSummary[] {
+  return [
+    {
+      id: QUESTION_ID,
+      machineId: MACHINE_ALPHA,
+      machineName: 'alpha-macbook',
+      claudeSessionId: SESSION_RUNNING,
+      text: 'Which AWS region should I deploy to?',
+      status: 'pending',
+      createdAt: '2026-08-16T12:00:32Z',
+      answer: null,
+      resolvedBy: null,
     },
   ];
 }
@@ -131,6 +153,17 @@ function routeFetch(input: RequestInfo | URL): Response {
   if (path === '/alerts') return jsonResponse({ alerts: ALERTS });
   if (path === '/approvals') return jsonResponse({ approvals: APPROVALS });
   if (path === '/commands') return jsonResponse({ commands: COMMANDS });
+  if (path === '/questions') return jsonResponse({ questions: QUESTIONS });
+  if (path.startsWith('/search?')) return jsonResponse({ results: [] });
+  if (/^\/questions\/[^/]+\/answer$/.test(path)) {
+    return jsonResponse({ status: 'answered' });
+  }
+  if (/^\/sessions\/[^/]+\/transcript$/.test(path)) {
+    return jsonResponse({ messages: TRANSCRIPT });
+  }
+  if (/^\/machines\/[^/]+\/start-managed$/.test(path)) {
+    return jsonResponse({ commandId: 'cmd-managed-1', status: 'pending' }, 202);
+  }
   if (/^\/sessions\/[^/]+\/dispatch$/.test(path)) {
     return jsonResponse({ commandId: 'cmd-dispatch-1', status: 'pending' }, 202);
   }
@@ -180,6 +213,8 @@ beforeEach(() => {
   ALERTS = [];
   APPROVALS = [];
   COMMANDS = [];
+  QUESTIONS = [];
+  TRANSCRIPT = [];
   MockWebSocket.reset();
   vi.stubGlobal('WebSocket', MockWebSocket as unknown as typeof WebSocket);
   fetchMock = vi.fn(async (input: RequestInfo | URL) => routeFetch(input));
@@ -500,6 +535,132 @@ describe('operator dashboard', () => {
         }),
       ).toBe(true),
     );
+  });
+
+  it('renders a pending question with an answer box; typing + Send calls the answer endpoint', async () => {
+    QUESTIONS = makeQuestions();
+    renderApp();
+
+    const item = await screen.findByTestId('question-item');
+    expect(
+      within(item).getByText('Which AWS region should I deploy to?'),
+    ).toBeInTheDocument();
+    expect(within(item).getByText('alpha-macbook')).toBeInTheDocument();
+
+    const input = within(item).getByTestId('question-answer-input');
+    act(() => {
+      fireEvent.change(input, { target: { value: 'Use us-east-1' } });
+    });
+    act(() => within(item).getByTestId('question-send').click());
+
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([reqInput, init]) => {
+          const url =
+            typeof reqInput === 'string' ? reqInput : (reqInput as URL).href ?? '';
+          return (
+            String(url).includes(`/questions/${QUESTION_ID}/answer`) &&
+            (init as RequestInit | undefined)?.method === 'POST' &&
+            String((init as RequestInit | undefined)?.body ?? '').includes(
+              'Use us-east-1',
+            )
+          );
+        }),
+      ).toBe(true),
+    );
+  });
+
+  it('removes a question from the pending inbox on an answered question_event', async () => {
+    QUESTIONS = makeQuestions();
+    renderApp();
+
+    await screen.findByTestId('question-item');
+    await waitFor(() => expect(MockWebSocket.last).toBeDefined());
+
+    const ws = MockWebSocket.last!;
+    act(() => ws.emitOpen());
+
+    const payload: QuestionEventPayload = {
+      questionId: QUESTION_ID,
+      machineId: MACHINE_ALPHA,
+      machineName: 'alpha-macbook',
+      claudeSessionId: SESSION_RUNNING,
+      text: 'Which AWS region should I deploy to?',
+      status: 'answered',
+      at: '2026-08-16T12:00:50Z',
+      resolvedBy: 'operator',
+    };
+    const envelope: Envelope<QuestionEventPayload> = {
+      protocolVersion: '0.5.0',
+      type: 'question_event',
+      seq: 13,
+      payload,
+    };
+    act(() => ws.emitMessage(envelope));
+
+    await waitFor(() =>
+      expect(screen.queryByTestId('question-item')).not.toBeInTheDocument(),
+    );
+    // The pending heading drops to zero; it now shows resolved for context.
+    expect(screen.getByText(/Questions \(0\)/)).toBeInTheDocument();
+    expect(screen.getByTestId('question-resolved-item')).toBeInTheDocument();
+  });
+
+  it('appends a transcript_event message to the open managed session transcript', async () => {
+    // A managed control command marks the session managed; the transcript seeds
+    // from GET /sessions/{id}/transcript.
+    COMMANDS = [
+      {
+        id: 'cmd-managed-seed',
+        machineId: MACHINE_ALPHA,
+        machineName: 'alpha-macbook',
+        type: 'start_managed',
+        claudeSessionId: SESSION_RUNNING,
+        instruction: 'build the thing',
+        status: 'started',
+        createdAt: '2026-08-16T12:00:00Z',
+        message: null,
+      },
+    ];
+    TRANSCRIPT = [
+      { role: 'assistant', text: 'seed message', at: '2026-08-16T12:00:05Z' },
+    ];
+    renderApp();
+
+    const cards = await screen.findAllByTestId('machine-card');
+    const rows = within(cards[0]).getAllByTestId('session-row');
+    // Open the running session (SESSIONS[0] === SESSION_RUNNING).
+    act(() => within(rows[0]).getByRole('button').click());
+
+    // Managed badge + seeded transcript message render.
+    await screen.findByTestId('managed-badge');
+    await waitFor(() =>
+      expect(screen.getByText('seed message')).toBeInTheDocument(),
+    );
+    await waitFor(() => expect(MockWebSocket.last).toBeDefined());
+
+    const ws = MockWebSocket.last!;
+    act(() => ws.emitOpen());
+
+    const payload: TranscriptEventPayload = {
+      claudeSessionId: SESSION_RUNNING,
+      machineId: MACHINE_ALPHA,
+      role: 'assistant',
+      text: 'live appended message',
+      at: '2026-08-16T12:01:00Z',
+    };
+    const envelope: Envelope<TranscriptEventPayload> = {
+      protocolVersion: '0.5.0',
+      type: 'transcript_event',
+      seq: 21,
+      payload,
+    };
+    act(() => ws.emitMessage(envelope));
+
+    await waitFor(() =>
+      expect(screen.getByText('live appended message')).toBeInTheDocument(),
+    );
+    expect(screen.getAllByTestId('transcript-msg')).toHaveLength(2);
   });
 
   it('shows connection stream status once the socket opens', async () => {

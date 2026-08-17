@@ -9,10 +9,16 @@ import type {
   CommandsResponse,
   ControlCommandSummary,
   ControlStatus,
+  QuestionSummary,
+  QuestionsResponse,
+  SearchResponse,
+  SearchResult,
   SessionDetail,
   SessionSummary,
   SessionsResponse,
   StatusResponse,
+  TranscriptMessage,
+  TranscriptResponse,
 } from './types';
 
 /** TanStack Query key for the seeded `/status` snapshot. */
@@ -25,9 +31,17 @@ export const ALERTS_QUERY_KEY = ['alerts'] as const;
 export const APPROVALS_QUERY_KEY = ['approvals'] as const;
 /** TanStack Query key for the seeded `/commands` control activity strip. */
 export const COMMANDS_QUERY_KEY = ['commands'] as const;
+/** TanStack Query key for the seeded `/questions` inbox. */
+export const QUESTIONS_QUERY_KEY = ['questions'] as const;
 /** TanStack Query key factory for a single session's detail. */
 export const sessionDetailQueryKey = (id: string) =>
   ['session', id] as const;
+/** TanStack Query key factory for a single session's managed transcript. */
+export const transcriptQueryKey = (id: string) =>
+  ['transcript', id] as const;
+/** TanStack Query key factory for a cross-session search term. */
+export const searchQueryKey = (term: string) =>
+  ['search', term] as const;
 
 export class ApiError extends Error {
   constructor(
@@ -255,4 +269,107 @@ export async function fetchCommands(): Promise<ControlCommandSummary[]> {
   }
   const body = (await res.json()) as CommandsResponse;
   return body.commands ?? [];
+}
+
+/**
+ * Starts a managed (Agent-SDK) run (`POST /machines/{id}/start-managed`).
+ * → `202 { commandId, status: 'pending' }`; `409` if the machine is offline.
+ * The session appears in monitoring marked managed.
+ */
+export async function startManaged(
+  machineId: string,
+  projectPath: string,
+  instruction: string,
+): Promise<ControlResult> {
+  return issueControl(
+    `/machines/${encodeURIComponent(machineId)}/start-managed`,
+    { projectPath, instruction },
+    `POST /machines/${machineId}/start-managed`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4 — Full interactive control (questions, transcript, search)
+// ---------------------------------------------------------------------------
+
+/** Lists pending + recent free-form questions for the inbox (`GET /questions`). */
+export async function fetchQuestions(): Promise<QuestionSummary[]> {
+  const res = await fetch('/questions', {
+    credentials: 'include',
+    headers: { accept: 'application/json' },
+  });
+  if (!res.ok) {
+    throw new ApiError(`GET /questions failed: ${res.status}`, res.status);
+  }
+  const body = (await res.json()) as QuestionsResponse;
+  return body.questions ?? [];
+}
+
+/** Outcome of answering a question: it applied, or it was already resolved. */
+export type AnswerResult =
+  | { outcome: 'applied'; status: 'answered' | 'cancelled' }
+  | { outcome: 'already_resolved' };
+
+/** The two ways to resolve a pending question: supply an answer, or cancel it. */
+export type AnswerInput = { answer: string } | { cancel: true };
+
+/**
+ * Answers or cancels a pending question (`POST /questions/{id}/answer`).
+ * - `200` → `{ outcome: 'applied', status }` (`answered` or `cancelled`).
+ * - `409 already_resolved` → `{ outcome: 'already_resolved' }` (handled
+ *   gracefully; the question was already resolved — e.g. by a crash/cancel).
+ * The answer is applied at most once; ClaudeDriver NEVER fabricates one.
+ */
+export async function answerQuestion(
+  id: string,
+  input: AnswerInput,
+): Promise<AnswerResult> {
+  const res = await fetch(`/questions/${encodeURIComponent(id)}/answer`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (res.status === 409) {
+    return { outcome: 'already_resolved' };
+  }
+  if (!res.ok) {
+    throw new ApiError(
+      `POST /questions/${id}/answer failed: ${res.status}`,
+      res.status,
+    );
+  }
+  const body = (await res.json()) as { status: 'answered' | 'cancelled' };
+  return { outcome: 'applied', status: body.status };
+}
+
+/** Fetches the full ordered transcript of a session (`GET /sessions/{id}/transcript`). */
+export async function fetchTranscript(
+  sessionId: string,
+): Promise<TranscriptMessage[]> {
+  const res = await fetch(
+    `/sessions/${encodeURIComponent(sessionId)}/transcript`,
+    { credentials: 'include', headers: { accept: 'application/json' } },
+  );
+  if (!res.ok) {
+    throw new ApiError(
+      `GET /sessions/${sessionId}/transcript failed: ${res.status}`,
+      res.status,
+    );
+  }
+  const body = (await res.json()) as TranscriptResponse;
+  return body.messages ?? [];
+}
+
+/** Cross-session transcript search (`GET /search?q=`). Bounded; never blocks live control. */
+export async function search(q: string): Promise<SearchResult[]> {
+  const res = await fetch(`/search?q=${encodeURIComponent(q)}`, {
+    credentials: 'include',
+    headers: { accept: 'application/json' },
+  });
+  if (!res.ok) {
+    throw new ApiError(`GET /search failed: ${res.status}`, res.status);
+  }
+  const body = (await res.json()) as SearchResponse;
+  return body.results ?? [];
 }

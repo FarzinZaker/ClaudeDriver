@@ -15,7 +15,7 @@ import kotlinx.serialization.json.encodeToJsonElement
  */
 
 /** Current contract version. Bump in the same change set as any wire change. */
-const val PROTOCOL_VERSION: String = "0.4.0"
+const val PROTOCOL_VERSION: String = "0.5.0"
 
 /** Message type discriminators carried in the envelope `type` field. */
 object MessageType {
@@ -40,9 +40,16 @@ object MessageType {
     const val APPROVAL_EVENT = "approval_event"       // backend → operator (live UI)
 
     // Phase 3 (remote control) — backend → agent, agent → backend, backend → operator
-    const val CONTROL_COMMAND = "control_command"     // backend → agent (start/dispatch/stop)
+    const val CONTROL_COMMAND = "control_command"     // backend → agent (start/dispatch/stop/start_managed)
     const val CONTROL_RESULT = "control_result"       // agent → backend (outcome)
     const val CONTROL_EVENT = "control_event"         // backend → operator (live UI)
+
+    // Phase 4 (managed sessions) — agent ↔ backend and backend → operator
+    const val QUESTION_RAISED = "question_raised"       // agent → backend (managed session asked)
+    const val QUESTION_ANSWER = "question_answer"       // backend → agent (operator answer/cancel)
+    const val TRANSCRIPT_MESSAGE = "transcript_message" // agent → backend (conversation line)
+    const val QUESTION_EVENT = "question_event"         // backend → operator (live UI)
+    const val TRANSCRIPT_EVENT = "transcript_event"     // backend → operator (live UI)
 }
 
 /**
@@ -231,6 +238,52 @@ data class ControlEvent(
     val claudeSessionId: String? = null,
     val at: String,
     val message: String? = null,
+)
+
+// ---- Phase 4 payload types (contracts/protocol-additions.md) ---------------------------------
+
+@kotlinx.serialization.Serializable
+data class QuestionRaised(
+    val questionId: String,
+    val claudeSessionId: String,
+    val text: String,
+    val at: String,
+)
+
+@kotlinx.serialization.Serializable
+data class QuestionAnswer(
+    val questionId: String,
+    val answer: String? = null,
+    val cancel: Boolean = false,
+)
+
+@kotlinx.serialization.Serializable
+data class TranscriptMessage(
+    val claudeSessionId: String,
+    val role: String, // assistant | user | tool | system
+    val text: String,
+    val at: String,
+)
+
+@kotlinx.serialization.Serializable
+data class QuestionEvent(
+    val questionId: String,
+    val machineId: String,
+    val machineName: String,
+    val claudeSessionId: String,
+    val text: String,
+    val status: String, // pending | answered | cancelled | unanswered
+    val at: String,
+    val resolvedBy: String? = null,
+)
+
+@kotlinx.serialization.Serializable
+data class TranscriptEvent(
+    val claudeSessionId: String,
+    val machineId: String,
+    val role: String,
+    val text: String,
+    val at: String,
 )
 
 /** Encode/decode helpers so no consumer re-implements the framing. */

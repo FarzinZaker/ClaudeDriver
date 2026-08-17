@@ -1,9 +1,12 @@
+import type { AnswerInput } from '../api';
 import type {
   AlertSummary,
   ApprovalSummary,
   ControlCommandSummary,
   Machine,
+  QuestionSummary,
   SampleEventRecord,
+  SearchResult,
   ServerInfo,
   SessionState,
   SessionSummary,
@@ -13,6 +16,8 @@ import { AlertInbox } from './AlertInbox';
 import { ApprovalsPanel } from './ApprovalsPanel';
 import { CommandsStrip } from './CommandsStrip';
 import { ConnectionHealth } from './ConnectionHealth';
+import { QuestionsInbox } from './QuestionsInbox';
+import { SearchBox } from './SearchBox';
 import { SESSION_STATE_LABEL } from './SessionDetail';
 import { StartRunPanel } from './StartRunPanel';
 
@@ -34,6 +39,18 @@ interface Props {
   onOpenSession: (sessionId: string) => void;
   onStartRun: (machineId: string, projectPath: string, instruction: string) => void;
   startRunPending?: boolean;
+  onStartManaged: (machineId: string, projectPath: string, instruction: string) => void;
+  startManagedPending?: boolean;
+  // Phase 4 — questions inbox
+  questions: QuestionSummary[];
+  onAnswerQuestion: (id: string, input: AnswerInput) => void;
+  answerPendingId?: string | null;
+  questionNotes?: Record<string, string>;
+  // Phase 4 — cross-session search
+  onSearch: (term: string) => void;
+  searchResults?: SearchResult[];
+  searchTerm?: string;
+  searchPending?: boolean;
 }
 
 function formatTime(iso: string): string {
@@ -159,6 +176,16 @@ export function StatusView({
   onOpenSession,
   onStartRun,
   startRunPending,
+  onStartManaged,
+  startManagedPending,
+  questions,
+  onAnswerQuestion,
+  answerPendingId,
+  questionNotes,
+  onSearch,
+  searchResults,
+  searchTerm,
+  searchPending,
 }: Props) {
   const sessionsByMachine = new Map<string, SessionSummary[]>();
   for (const s of sessions) {
@@ -185,10 +212,28 @@ export function StatusView({
 
       <ConnectionHealth wsStatus={wsStatus} machines={machines} />
 
+      <SearchBox
+        onSearch={onSearch}
+        results={searchResults}
+        activeTerm={searchTerm}
+        isSearching={searchPending}
+        onOpenSession={onOpenSession}
+      />
+
       <StartRunPanel
         machines={machines}
         onStartRun={onStartRun}
+        onStartManaged={onStartManaged}
         startRunPending={startRunPending}
+        startManagedPending={startManagedPending}
+      />
+
+      <QuestionsInbox
+        questions={questions}
+        onAnswer={onAnswerQuestion}
+        answerPendingId={answerPendingId}
+        notes={questionNotes}
+        onOpenSession={onOpenSession}
       />
 
       <ApprovalsPanel

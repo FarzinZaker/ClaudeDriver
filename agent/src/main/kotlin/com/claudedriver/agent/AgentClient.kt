@@ -4,6 +4,7 @@ import com.claudedriver.protocol.ApprovalDecision
 import com.claudedriver.protocol.ApprovalRequest
 import com.claudedriver.protocol.Codec
 import com.claudedriver.protocol.ControlCommand
+import com.claudedriver.protocol.QuestionAnswer
 import com.claudedriver.protocol.Envelope
 import com.claudedriver.protocol.Hello
 import com.claudedriver.protocol.HelloAck
@@ -62,8 +63,10 @@ class AgentClient(
     private val hookReceiverPort: Int = 8765,
     private val settingsFile: File = HookInstaller.defaultSettingsFile(),
     private val launcher: Launcher = ShellSessionLauncher(),
+    private val companionLauncher: CompanionLauncher = PythonCompanionLauncher(),
 ) {
     private var sessionController: SessionController? = null
+    private var managedController: ManagedSessionController? = null
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val http = HttpClient(CIO) { install(WebSockets) }
     private val hookTokenEnvVar = "CLAUDEDRIVER_HOOK_TOKEN"
@@ -144,6 +147,14 @@ class AgentClient(
             emitActivity = { activity -> emit(MessageType.ACTIVITY_EVENT, activity) },
             emitResult = { result -> emit(MessageType.CONTROL_RESULT, result) },
         )
+        managedController = ManagedSessionController(
+            launcher = companionLauncher,
+            scope = this,
+            emitActivity = { activity -> emit(MessageType.ACTIVITY_EVENT, activity) },
+            emitResult = { result -> emit(MessageType.CONTROL_RESULT, result) },
+            emitQuestion = { question -> emit(MessageType.QUESTION_RAISED, question) },
+            emitTranscript = { message -> emit(MessageType.TRANSCRIPT_MESSAGE, message) },
+        )
 
         var attempt = 0
         while (true) {
@@ -195,7 +206,16 @@ class AgentClient(
 
                         MessageType.CONTROL_COMMAND -> {
                             val command = Codec.decodePayload<ControlCommand>(env)
-                            launch { sessionController?.handle(command) }
+                            if (command.type == "start_managed") {
+                                launch { managedController?.startManaged(command) }
+                            } else {
+                                launch { sessionController?.handle(command) }
+                            }
+                        }
+
+                        MessageType.QUESTION_ANSWER -> {
+                            val answer = Codec.decodePayload<QuestionAnswer>(env)
+                            launch { managedController?.answer(answer) }
                         }
                     }
                 }

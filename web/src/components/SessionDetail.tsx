@@ -1,5 +1,12 @@
 import { useState } from 'react';
-import type { ControlCommandSummary, SessionDetail, SessionState } from '../types';
+import type { AnswerInput } from '../api';
+import type {
+  ControlCommandSummary,
+  QuestionSummary,
+  SessionDetail,
+  SessionState,
+  TranscriptMessage,
+} from '../types';
 import { CONTROL_TYPE_LABEL, ControlStatusBadge } from './CommandsStrip';
 
 interface Props {
@@ -15,6 +22,18 @@ interface Props {
   stopPending?: boolean;
   /** Latest control command targeting this session, for live status. */
   latestCommand?: ControlCommandSummary;
+  /** Whether this session runs under management (Agent SDK). */
+  managed?: boolean;
+  /** The ordered managed-session transcript (Phase 4), or undefined for monitored-only. */
+  transcript?: TranscriptMessage[];
+  transcriptLoading?: boolean;
+  /** Pending free-form questions on this session (managed mode). */
+  pendingQuestions?: QuestionSummary[];
+  /** Answer / cancel a pending question (`POST /questions/{id}/answer`). */
+  onAnswerQuestion?: (id: string, input: AnswerInput) => void;
+  answerPendingId?: string | null;
+  /** Per-question transient notes (e.g. "already resolved" after a 409). */
+  questionNotes?: Record<string, string>;
 }
 
 export const SESSION_STATE_LABEL: Record<SessionState, string> = {
@@ -111,6 +130,104 @@ function ControlSurface({
   );
 }
 
+/** Compact inline answer affordance for a pending question on a managed session. */
+function InlineQuestion({
+  question,
+  onAnswer,
+  busy,
+  note,
+}: {
+  question: QuestionSummary;
+  onAnswer: (id: string, input: AnswerInput) => void;
+  busy: boolean;
+  note?: string;
+}) {
+  const [answer, setAnswer] = useState('');
+  const canSend = !busy && answer.trim() !== '';
+  return (
+    <div
+      className="inline-question"
+      data-testid="inline-question"
+      data-question-id={question.id}
+    >
+      <span className="badge badge--question-pending">waiting on you</span>
+      <p className="inline-question__text">{question.text}</p>
+      <textarea
+        data-testid="inline-question-input"
+        className="inline-question__input"
+        value={answer}
+        rows={2}
+        placeholder="Type an answer for this session…"
+        onChange={(e) => setAnswer(e.target.value)}
+      />
+      {note && (
+        <span className="question-card__note" data-testid="inline-question-note">
+          {note}
+        </span>
+      )}
+      <div className="inline-question__actions">
+        <button
+          type="button"
+          className="btn btn--sm btn--primary"
+          data-testid="inline-question-send"
+          disabled={!canSend}
+          onClick={() => canSend && onAnswer(question.id, { answer: answer.trim() })}
+        >
+          {busy ? 'Sending…' : 'Send answer'}
+        </button>
+        <button
+          type="button"
+          className="btn btn--sm btn--deny"
+          data-testid="inline-question-cancel"
+          disabled={busy}
+          onClick={() => onAnswer(question.id, { cancel: true })}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** The ordered transcript of a managed session (FR-008). */
+function TranscriptView({
+  transcript,
+  isLoading,
+}: {
+  transcript?: TranscriptMessage[];
+  isLoading?: boolean;
+}) {
+  return (
+    <section className="transcript" data-testid="transcript" aria-label="Transcript">
+      <h3 className="session-detail__subhead">
+        Transcript ({transcript?.length ?? 0})
+      </h3>
+      {isLoading && !transcript ? (
+        <p className="empty">Loading transcript…</p>
+      ) : !transcript || transcript.length === 0 ? (
+        <p className="empty">No transcript messages yet.</p>
+      ) : (
+        <ol className="transcript-list" data-testid="transcript-list">
+          {transcript.map((m, i) => (
+            <li
+              className={`transcript-msg transcript-msg--${m.role}`}
+              data-testid="transcript-msg"
+              data-role={m.role}
+              key={`${m.at}-${i}`}
+            >
+              <span className="transcript-msg__role">{m.role}</span>
+              <span className="transcript-msg__text">{m.text}</span>
+              <time className="transcript-msg__at" dateTime={m.at}>
+                {formatTime(m.at)}
+              </time>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
 /** Modal panel: a session's state, project, last-active, and recent history (FR-016). */
 export function SessionDetailModal({
   detail,
@@ -122,6 +239,13 @@ export function SessionDetailModal({
   dispatchPending,
   stopPending,
   latestCommand,
+  managed,
+  transcript,
+  transcriptLoading,
+  pendingQuestions,
+  onAnswerQuestion,
+  answerPendingId,
+  questionNotes,
 }: Props) {
   return (
     <div
@@ -137,7 +261,14 @@ export function SessionDetailModal({
         onClick={(e) => e.stopPropagation()}
       >
         <header className="modal__head">
-          <h2>Session detail</h2>
+          <h2>
+            Session detail
+            {managed && (
+              <span className="badge badge--managed" data-testid="managed-badge">
+                managed
+              </span>
+            )}
+          </h2>
           <button
             type="button"
             className="btn btn--ghost btn--sm"
@@ -178,6 +309,30 @@ export function SessionDetailModal({
               </div>
             </dl>
 
+            {managed &&
+              onAnswerQuestion &&
+              pendingQuestions &&
+              pendingQuestions.length > 0 && (
+                <section
+                  className="session-detail__questions"
+                  data-testid="session-questions"
+                  aria-label="Pending questions"
+                >
+                  <h3 className="session-detail__subhead">
+                    Questions waiting on you ({pendingQuestions.length})
+                  </h3>
+                  {pendingQuestions.map((q) => (
+                    <InlineQuestion
+                      key={q.id}
+                      question={q}
+                      onAnswer={onAnswerQuestion}
+                      busy={answerPendingId === q.id}
+                      note={questionNotes?.[q.id]}
+                    />
+                  ))}
+                </section>
+              )}
+
             <ControlSurface
               session={detail.session}
               onDispatch={onDispatch}
@@ -186,6 +341,13 @@ export function SessionDetailModal({
               stopPending={stopPending}
               latestCommand={latestCommand}
             />
+
+            {managed && (
+              <TranscriptView
+                transcript={transcript}
+                isLoading={transcriptLoading}
+              />
+            )}
 
             <h3 className="session-detail__subhead">
               Recent activity ({detail.recentEvents.length})

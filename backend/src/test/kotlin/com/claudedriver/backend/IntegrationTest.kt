@@ -107,6 +107,21 @@ class IntegrationTest {
         assertTrue(hasAuthFailure, "a refused /status must record an auth_failure audit event")
     }
 
+    @Test
+    fun `rotating a device cert revokes the old identity and issues a fresh enrollment`() {
+        val machineId = enrollment.createMachine("dev-rotate", "macos")
+        val approved = enrollment.approveEnrollment(machineId, "operator")
+        val issued = enrollment.consumeEnrollment(machineId, approved.code, csrPem(machineId.toString()))
+        assertNotNull(trust.resolve(issued.fingerprint), "enrolled cert resolves")
+
+        val rotated = enrollment.rotateDeviceCert(machineId, "operator")
+        assertNull(trust.resolve(issued.fingerprint), "old cert is revoked after rotation")
+
+        // The freshly-minted enrollment yields a working new identity.
+        val reissued = enrollment.consumeEnrollment(machineId, rotated.code, csrPem(machineId.toString()))
+        assertNotNull(trust.resolve(reissued.fingerprint), "rotated-in cert resolves")
+    }
+
     private fun testConfig(url: String, user: String, password: String) = Config(
         env = "test", host = "0.0.0.0", port = 8080,
         databaseUrl = url, databaseUser = user, databasePassword = password,

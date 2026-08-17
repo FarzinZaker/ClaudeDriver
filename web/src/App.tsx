@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ackAlert,
   ALERTS_QUERY_KEY,
+  answerQuestion,
   ApiError,
   APPROVALS_QUERY_KEY,
   COMMANDS_QUERY_KEY,
@@ -11,14 +12,22 @@ import {
   fetchAlerts,
   fetchApprovals,
   fetchCommands,
+  fetchQuestions,
   fetchSessionDetail,
   fetchSessions,
   fetchStatus,
+  fetchTranscript,
+  QUESTIONS_QUERY_KEY,
+  search,
+  searchQueryKey,
   SESSIONS_QUERY_KEY,
   sessionDetailQueryKey,
+  startManaged,
   startRun,
   STATUS_QUERY_KEY,
   stopSession,
+  transcriptQueryKey,
+  type AnswerInput,
   type ControlResult,
 } from './api';
 import { logout } from './auth/webauthn';
@@ -33,11 +42,15 @@ import type {
   ControlCommandSummary,
   ControlCommandType,
   ControlEventPayload,
+  QuestionEventPayload,
+  QuestionSummary,
   SampleEventPayload,
   SampleEventRecord,
   SessionSummary,
   SessionUpdatePayload,
   StatusResponse,
+  TranscriptEventPayload,
+  TranscriptMessage,
 } from './types';
 import { OperatorWsClient, operatorWsUrl, type WsStatus } from './ws/client';
 
@@ -222,11 +235,58 @@ function upsertCommand(
   return [command, ...list].slice(0, MAX_COMMANDS);
 }
 
+/**
+ * Patch a live `question_event` into the cached questions inbox, correlated by
+ * `questionId`. A `pending` event upserts the question; a resolved event
+ * (`answered`/`cancelled`/`unanswered`) updates its status in place so the inbox
+ * drops it from the pending list. The payload carries `machineName` directly.
+ */
+function applyQuestionEvent(
+  prev: QuestionSummary[] | undefined,
+  ev: QuestionEventPayload,
+): QuestionSummary[] {
+  const list = prev ?? [];
+  const idx = list.findIndex((q) => q.id === ev.questionId);
+  if (idx === -1) {
+    const created: QuestionSummary = {
+      id: ev.questionId,
+      machineId: ev.machineId,
+      machineName: ev.machineName,
+      claudeSessionId: ev.claudeSessionId,
+      text: ev.text,
+      status: ev.status,
+      createdAt: ev.at,
+      answer: null,
+      resolvedBy: ev.resolvedBy ?? null,
+    };
+    return [created, ...list].slice(0, MAX_INBOX);
+  }
+  const next = list.slice();
+  next[idx] = {
+    ...next[idx],
+    status: ev.status,
+    text: ev.text || next[idx].text,
+    resolvedBy: ev.resolvedBy ?? next[idx].resolvedBy ?? null,
+  };
+  return next;
+}
+
+/** Append a live `transcript_event` message to a session's cached transcript. */
+function applyTranscriptEvent(
+  prev: TranscriptMessage[] | undefined,
+  ev: TranscriptEventPayload,
+): TranscriptMessage[] {
+  const message: TranscriptMessage = { role: ev.role, text: ev.text, at: ev.at };
+  return [...(prev ?? []), message];
+}
+
 export default function App() {
   const queryClient = useQueryClient();
   const [wsStatus, setWsStatus] = useState<WsStatus>('closed');
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [approvalNotes, setApprovalNotes] = useState<Record<string, string>>({});
+  const [questionNotes, setQuestionNotes] = useState<Record<string, string>>({});
+  const [searchTerm, setSearchTerm] = useState('');
 
   const statusQuery = useQuery({
     queryKey: STATUS_QUERY_KEY,
@@ -264,10 +324,42 @@ export default function App() {
     enabled: authenticated,
   });
 
+  const questionsQuery = useQuery({
+    queryKey: QUESTIONS_QUERY_KEY,
+    queryFn: fetchQuestions,
+    enabled: authenticated,
+  });
+
   const sessionDetailQuery = useQuery({
     queryKey: sessionDetailQueryKey(selectedSessionId ?? ''),
     queryFn: () => fetchSessionDetail(selectedSessionId as string),
     enabled: authenticated && selectedSessionId != null,
+  });
+
+  const questions = questionsQuery.data ?? [];
+  // A session is "managed" if it has a managed control command, a free-form
+  // question, or a reconstructed transcript — inferred, since the wire summaries
+  // don't carry a `managed` flag.
+  const managedSelected =
+    selectedSessionId != null &&
+    (questions.some((q) => q.claudeSessionId === selectedSessionId) ||
+      (commandsQuery.data ?? []).some(
+        (c) => c.type === 'start_managed' && c.claudeSessionId === selectedSessionId,
+      ) ||
+      (queryClient.getQueryData<TranscriptMessage[]>(
+        transcriptQueryKey(selectedSessionId),
+      )?.length ?? 0) > 0);
+
+  const transcriptQuery = useQuery({
+    queryKey: transcriptQueryKey(selectedSessionId ?? ''),
+    queryFn: () => fetchTranscript(selectedSessionId as string),
+    enabled: authenticated && selectedSessionId != null && managedSelected,
+  });
+
+  const searchQuery = useQuery({
+    queryKey: searchQueryKey(searchTerm),
+    queryFn: () => search(searchTerm),
+    enabled: authenticated && searchTerm !== '',
   });
 
   const ackMutation = useMutation({
@@ -403,6 +495,54 @@ export default function App() {
     },
   });
 
+  const startManagedMutation = useMutation({
+    mutationFn: ({
+      machineId,
+      projectPath,
+      instruction,
+    }: {
+      machineId: string;
+      projectPath: string;
+      instruction: string;
+    }) => startManaged(machineId, projectPath, instruction),
+    onSuccess: (result, { machineId, instruction }) => {
+      const status = queryClient.getQueryData<StatusResponse>(STATUS_QUERY_KEY);
+      const machineName =
+        status?.machines.find((m) => m.id === machineId)?.name ?? machineId;
+      seedAcceptedCommand(result, {
+        type: 'start_managed',
+        machineId,
+        machineName,
+        instruction,
+      });
+    },
+  });
+
+  const answerMutation = useMutation({
+    mutationFn: ({ id, input }: { id: string; input: AnswerInput }) =>
+      answerQuestion(id, input),
+    onMutate: ({ id }) => {
+      // Clear any stale note from a previous attempt on this question.
+      setQuestionNotes((prev) => {
+        if (!(id in prev)) return prev;
+        const { [id]: _drop, ...rest } = prev;
+        return rest;
+      });
+    },
+    onSuccess: (result, { id }) => {
+      if (result.outcome === 'already_resolved') {
+        setQuestionNotes((prev) => ({ ...prev, [id]: 'Already resolved.' }));
+        return;
+      }
+      // Optimistic local transition; the WS `question_event` will confirm.
+      queryClient.setQueryData<QuestionSummary[]>(QUESTIONS_QUERY_KEY, (prev) =>
+        (prev ?? []).map((q) =>
+          q.id === id ? { ...q, status: result.status, resolvedBy: 'operator' } : q,
+        ),
+      );
+    },
+  });
+
   /** Resolve a machine's display name from the cached `/status` snapshot. */
   const resolveMachineName = useCallback(
     (machineId: string): string => {
@@ -457,6 +597,25 @@ export default function App() {
     [queryClient],
   );
 
+  const onQuestionEvent = useCallback(
+    (event: QuestionEventPayload) => {
+      queryClient.setQueryData<QuestionSummary[]>(QUESTIONS_QUERY_KEY, (prev) =>
+        applyQuestionEvent(prev, event),
+      );
+    },
+    [queryClient],
+  );
+
+  const onTranscriptEvent = useCallback(
+    (event: TranscriptEventPayload) => {
+      queryClient.setQueryData<TranscriptMessage[]>(
+        transcriptQueryKey(event.claudeSessionId),
+        (prev) => applyTranscriptEvent(prev, event),
+      );
+    },
+    [queryClient],
+  );
+
   // Open the operator WS only while authenticated; tear down on logout/unmount.
   useEffect(() => {
     if (!authenticated) {
@@ -470,6 +629,8 @@ export default function App() {
       onAlertEvent,
       onApprovalEvent,
       onControlEvent,
+      onQuestionEvent,
+      onTranscriptEvent,
     });
     client.connect();
     return () => client.close();
@@ -480,6 +641,8 @@ export default function App() {
     onAlertEvent,
     onApprovalEvent,
     onControlEvent,
+    onQuestionEvent,
+    onTranscriptEvent,
   ]);
 
   const handleAuthenticated = useCallback(() => {
@@ -492,11 +655,14 @@ export default function App() {
     } finally {
       setSelectedSessionId(null);
       setApprovalNotes({});
+      setQuestionNotes({});
+      setSearchTerm('');
       queryClient.removeQueries({ queryKey: STATUS_QUERY_KEY });
       queryClient.removeQueries({ queryKey: SESSIONS_QUERY_KEY });
       queryClient.removeQueries({ queryKey: ALERTS_QUERY_KEY });
       queryClient.removeQueries({ queryKey: APPROVALS_QUERY_KEY });
       queryClient.removeQueries({ queryKey: COMMANDS_QUERY_KEY });
+      queryClient.removeQueries({ queryKey: QUESTIONS_QUERY_KEY });
       void queryClient.resetQueries({ queryKey: STATUS_QUERY_KEY });
     }
   }, [queryClient]);
@@ -531,6 +697,13 @@ export default function App() {
       : commands
           .filter((c) => c.claudeSessionId === selectedSessionId)
           .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  // Pending free-form questions raised by the open managed session.
+  const pendingQuestionsForSelected =
+    selectedSessionId == null
+      ? []
+      : questions.filter(
+          (q) => q.claudeSessionId === selectedSessionId && q.status === 'pending',
+        );
 
   return (
     <main className="app">
@@ -554,6 +727,18 @@ export default function App() {
           startRunMutation.mutate({ machineId, projectPath, instruction })
         }
         startRunPending={startRunMutation.isPending}
+        onStartManaged={(machineId, projectPath, instruction) =>
+          startManagedMutation.mutate({ machineId, projectPath, instruction })
+        }
+        startManagedPending={startManagedMutation.isPending}
+        questions={questions}
+        onAnswerQuestion={(id, input) => answerMutation.mutate({ id, input })}
+        answerPendingId={answerMutation.isPending ? answerMutation.variables.id : null}
+        questionNotes={questionNotes}
+        onSearch={setSearchTerm}
+        searchResults={searchQuery.data}
+        searchTerm={searchTerm}
+        searchPending={searchQuery.isFetching}
       />
       {selectedSessionId != null && (
         <SessionDetailModal
@@ -574,6 +759,13 @@ export default function App() {
             stopMutation.variables?.sessionId === selectedSessionId
           }
           latestCommand={latestCommandForSelected}
+          managed={managedSelected}
+          transcript={transcriptQuery.data}
+          transcriptLoading={transcriptQuery.isPending && managedSelected}
+          pendingQuestions={pendingQuestionsForSelected}
+          onAnswerQuestion={(id, input) => answerMutation.mutate({ id, input })}
+          answerPendingId={answerMutation.isPending ? answerMutation.variables.id : null}
+          questionNotes={questionNotes}
         />
       )}
     </main>

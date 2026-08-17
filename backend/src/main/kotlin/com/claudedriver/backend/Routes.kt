@@ -16,10 +16,17 @@ import com.claudedriver.backend.api.DecideRequest
 import com.claudedriver.backend.api.DecideResponse
 import com.claudedriver.backend.api.DeviceRegisterRequest
 import com.claudedriver.backend.api.DispatchRequest
+import com.claudedriver.backend.api.AnswerRequest
+import com.claudedriver.backend.api.AnswerResponse
+import com.claudedriver.backend.api.QuestionsResponse
+import com.claudedriver.backend.api.RotateCertResponse
+import com.claudedriver.backend.api.SearchResponse
 import com.claudedriver.backend.api.SessionsResponse
 import com.claudedriver.backend.api.StartRunRequest
+import com.claudedriver.backend.api.TranscriptResponse
 import com.claudedriver.backend.api.toDto
 import com.claudedriver.backend.approvals.DecideOutcome
+import com.claudedriver.backend.managed.AnswerOutcome
 import com.claudedriver.backend.audit.AuditAction
 import com.claudedriver.backend.connection.TrustService
 import com.claudedriver.backend.enrollment.EnrollmentException
@@ -29,6 +36,8 @@ import com.claudedriver.protocol.ActivityEvent
 import com.claudedriver.protocol.ApprovalRequest
 import com.claudedriver.protocol.Codec
 import com.claudedriver.protocol.ControlResult
+import com.claudedriver.protocol.QuestionRaised
+import com.claudedriver.protocol.TranscriptMessage
 import com.claudedriver.protocol.Envelope
 import com.claudedriver.protocol.HelloAck
 import com.claudedriver.protocol.MessageType
@@ -278,6 +287,56 @@ fun Application.configureRouting(deps: AppDeps) = routing {
         call.respond(CommandsResponse(deps.control.list().map { it.toDto() }))
     }
 
+    // ---- Operator: managed sessions (questions / transcript / search) ----
+    post("/machines/{id}/start-managed") {
+        val op = requireOperator(deps) ?: return@post
+        val req = call.receive<StartRunRequest>()
+        val machineId = UUID.fromString(call.parameters["id"])
+        if (!deps.control.isConnected(machineId)) {
+            return@post call.respond(HttpStatusCode.Conflict, ErrorResponse("offline", "Machine is offline"))
+        }
+        val commandId = deps.control.issue(
+            type = "start_managed", machineId = machineId,
+            projectPath = req.projectPath, instruction = req.instruction, operator = op.handle,
+        )
+        call.respond(HttpStatusCode.Accepted, CommandAcceptedResponse(commandId.toString(), "pending"))
+    }
+
+    get("/questions") {
+        requireOperator(deps) ?: return@get
+        call.respond(QuestionsResponse(deps.managed.listQuestions().map { it.toDto() }))
+    }
+
+    post("/questions/{id}/answer") {
+        val op = requireOperator(deps) ?: return@post
+        val req = call.receive<AnswerRequest>()
+        when (deps.managed.answer(UUID.fromString(call.parameters["id"]), req.answer, req.cancel, op.handle)) {
+            AnswerOutcome.ANSWERED -> call.respond(HttpStatusCode.OK, AnswerResponse("answered"))
+            AnswerOutcome.CANCELLED -> call.respond(HttpStatusCode.OK, AnswerResponse("cancelled"))
+            AnswerOutcome.NOT_FOUND -> call.respond(HttpStatusCode.NotFound, ErrorResponse("not_found", "No such question"))
+            AnswerOutcome.ALREADY_RESOLVED -> call.respond(HttpStatusCode.Conflict, ErrorResponse("already_resolved", "Question already resolved"))
+        }
+    }
+
+    get("/sessions/{id}/transcript") {
+        requireOperator(deps) ?: return@get
+        call.respond(TranscriptResponse(deps.managed.transcript(UUID.fromString(call.parameters["id"])).map { it.toDto() }))
+    }
+
+    get("/search") {
+        requireOperator(deps) ?: return@get
+        val q = call.request.queryParameters["q"] ?: ""
+        val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 50
+        call.respond(SearchResponse(deps.managed.search(q, limit).map { it.toDto() }))
+    }
+
+    // ---- Operator: hardening ----
+    post("/machines/{id}/rotate-cert") {
+        val op = requireOperator(deps) ?: return@post
+        val rotated = deps.enrollment.rotateDeviceCert(UUID.fromString(call.parameters["id"]), op.handle)
+        call.respond(HttpStatusCode.Created, RotateCertResponse(rotated.code, rotated.expiresAt.toString()))
+    }
+
     // ---- Operator: push devices ----
     post("/devices") {
         val op = requireOperator(deps) ?: return@post
@@ -414,6 +473,7 @@ private suspend fun DefaultWebSocketServerSession.handleAgentConnect(deps: AppDe
                     deps.sessions.applyActivityEvent(identity.machineId, activity)
                     if (activity.kind == "stop" || activity.kind == "session_end") {
                         deps.approvals.mootForClaudeSession(identity.machineId, activity.claudeSessionId)
+                        deps.managed.markUnansweredForSession(identity.machineId, activity.claudeSessionId)
                     }
                     deps.trust.updateLastSeq(connectionId, env.seq)
                 }
@@ -427,6 +487,18 @@ private suspend fun DefaultWebSocketServerSession.handleAgentConnect(deps: AppDe
                 MessageType.CONTROL_RESULT -> {
                     val result = runCatching { Codec.decodePayload<ControlResult>(env) }.getOrNull() ?: continue
                     deps.control.applyResult(identity.machineId, result)
+                    deps.trust.updateLastSeq(connectionId, env.seq)
+                }
+
+                MessageType.QUESTION_RAISED -> {
+                    val raised = runCatching { Codec.decodePayload<QuestionRaised>(env) }.getOrNull() ?: continue
+                    deps.managed.raiseQuestion(identity.machineId, raised)
+                    deps.trust.updateLastSeq(connectionId, env.seq)
+                }
+
+                MessageType.TRANSCRIPT_MESSAGE -> {
+                    val message = runCatching { Codec.decodePayload<TranscriptMessage>(env) }.getOrNull() ?: continue
+                    deps.managed.storeTranscript(identity.machineId, message)
                     deps.trust.updateLastSeq(connectionId, env.seq)
                 }
             }

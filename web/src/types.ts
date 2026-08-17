@@ -10,7 +10,7 @@
  */
 
 /** Semver of the shared protocol contract this client speaks. */
-export const PROTOCOL_VERSION = '0.4.0';
+export const PROTOCOL_VERSION = '0.5.0';
 
 // ---------------------------------------------------------------------------
 // REST — GET /status
@@ -366,7 +366,11 @@ export function isApprovalEventEnvelope(
  * persistent Claude Code run on a machine/project, and `stop_session` ends a
  * running session.
  */
-export type ControlCommandType = 'start_run' | 'dispatch_task' | 'stop_session';
+export type ControlCommandType =
+  | 'start_run'
+  | 'dispatch_task'
+  | 'stop_session'
+  | 'start_managed';
 
 /**
  * Lifecycle of a control command. `pending` is the initial accepted state; the
@@ -443,5 +447,150 @@ export function isControlEventEnvelope(
     typeof p.machineId === 'string' &&
     typeof p.commandType === 'string' &&
     typeof p.status === 'string'
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4 — Full interactive control (specs/005-interactive-control)
+//   REST additions:  contracts/rest-api-additions.md
+//   Protocol adds:   contracts/protocol-additions.md
+// ---------------------------------------------------------------------------
+
+/**
+ * Lifecycle of a free-form question posed by a managed session. `pending` blocks
+ * a real session that is waiting on the operator; the terminal states are
+ * `answered` (the operator supplied text), `cancelled` (the operator declined —
+ * the session is told no answer was given), and `unanswered` (resolved without
+ * an answer, e.g. the runtime crashed or forced resolution). Never fabricated.
+ */
+export type QuestionStatus = 'pending' | 'answered' | 'cancelled' | 'unanswered';
+
+/**
+ * A free-form question as returned by `GET /questions`. `answer` and `resolvedBy`
+ * populate once the question resolves.
+ */
+export interface QuestionSummary {
+  id: string;
+  machineId: string;
+  machineName: string;
+  /** The managed Claude session that posed the question. */
+  claudeSessionId: string;
+  /** The free-form question text shown to the operator. */
+  text: string;
+  status: QuestionStatus;
+  /** RFC3339 timestamp of when the question was raised. */
+  createdAt: string;
+  /** The operator's answer once answered, else null. */
+  answer?: string | null;
+  /** Who resolved it (`operator`), or null while pending. */
+  resolvedBy?: string | null;
+}
+
+/** Response body of `GET /questions`. */
+export interface QuestionsResponse {
+  questions: QuestionSummary[];
+}
+
+/** One ordered message in a managed session's reconstructed transcript. */
+export interface TranscriptMessage {
+  /** Speaker role — `assistant | user | tool | system`. */
+  role: string;
+  text: string;
+  /** RFC3339 timestamp. */
+  at: string;
+}
+
+/** Response body of `GET /sessions/{id}/transcript`. */
+export interface TranscriptResponse {
+  messages: TranscriptMessage[];
+}
+
+/** One cross-session search hit as returned by `GET /search`. */
+export interface SearchResult {
+  sessionId: string;
+  machineName: string;
+  claudeSessionId: string;
+  role: string;
+  /** A snippet of transcript text around the match. */
+  snippet: string;
+  /** RFC3339 timestamp. */
+  at: string;
+}
+
+/** Response body of `GET /search`. */
+export interface SearchResponse {
+  results: SearchResult[];
+}
+
+// --- WebSocket: question_event -------------------------------------------
+
+/**
+ * `question_event` payload. Like `approval_event`, the wire carries
+ * `machineName` directly and uses `questionId` (not `id`) with `at` (not
+ * `createdAt`).
+ */
+export interface QuestionEventPayload {
+  questionId: string;
+  machineId: string;
+  machineName: string;
+  claudeSessionId: string;
+  text: string;
+  status: QuestionStatus;
+  /** RFC3339 timestamp of the raise/resolution. */
+  at: string;
+  resolvedBy?: string | null;
+}
+
+export type QuestionEventEnvelope = Envelope<QuestionEventPayload> & {
+  type: 'question_event';
+};
+
+/** Narrowing guard for an incoming `question_event` envelope. */
+export function isQuestionEventEnvelope(
+  env: Envelope<unknown>,
+): env is QuestionEventEnvelope {
+  if (env.type !== 'question_event') return false;
+  const p = env.payload as Partial<QuestionEventPayload> | null;
+  return (
+    !!p &&
+    typeof p.questionId === 'string' &&
+    typeof p.machineId === 'string' &&
+    typeof p.claudeSessionId === 'string' &&
+    typeof p.text === 'string' &&
+    typeof p.status === 'string'
+  );
+}
+
+// --- WebSocket: transcript_event -----------------------------------------
+
+/**
+ * `transcript_event` payload — one new ordered message in a managed session's
+ * conversation. Keyed by `claudeSessionId`; carries `machineId`.
+ */
+export interface TranscriptEventPayload {
+  claudeSessionId: string;
+  machineId: string;
+  role: string;
+  text: string;
+  /** RFC3339 timestamp. */
+  at: string;
+}
+
+export type TranscriptEventEnvelope = Envelope<TranscriptEventPayload> & {
+  type: 'transcript_event';
+};
+
+/** Narrowing guard for an incoming `transcript_event` envelope. */
+export function isTranscriptEventEnvelope(
+  env: Envelope<unknown>,
+): env is TranscriptEventEnvelope {
+  if (env.type !== 'transcript_event') return false;
+  const p = env.payload as Partial<TranscriptEventPayload> | null;
+  return (
+    !!p &&
+    typeof p.claudeSessionId === 'string' &&
+    typeof p.role === 'string' &&
+    typeof p.text === 'string' &&
+    typeof p.at === 'string'
   );
 }

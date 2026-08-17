@@ -4,7 +4,10 @@ import type { Machine } from '../types';
 interface Props {
   machines: Machine[];
   onStartRun: (machineId: string, projectPath: string, instruction: string) => void;
+  /** Start a managed (Agent-SDK) run — fully interactive-controllable. */
+  onStartManaged?: (machineId: string, projectPath: string, instruction: string) => void;
   startRunPending?: boolean;
+  startManagedPending?: boolean;
 }
 
 /** Only connected, enrolled machines can accept a new run. */
@@ -17,23 +20,36 @@ function isStartable(m: Machine): boolean {
  * project path, and an initial instruction, then start a persistent run
  * (`POST /machines/{id}/start-run`). Collapsed by default to stay out of the way.
  */
-export function StartRunPanel({ machines, onStartRun, startRunPending }: Props) {
+export function StartRunPanel({
+  machines,
+  onStartRun,
+  onStartManaged,
+  startRunPending,
+  startManagedPending,
+}: Props) {
   const startable = machines.filter(isStartable);
   const [open, setOpen] = useState(false);
   const [machineId, setMachineId] = useState('');
   const [projectPath, setProjectPath] = useState('');
   const [instruction, setInstruction] = useState('');
+  const [managed, setManaged] = useState(false);
 
+  const canManaged = managed && onStartManaged != null;
+  const pending = startRunPending || startManagedPending;
   const effectiveMachine = machineId || startable[0]?.id || '';
   const canSubmit =
-    !startRunPending &&
+    !pending &&
     effectiveMachine !== '' &&
     projectPath.trim() !== '' &&
     instruction.trim() !== '';
 
   const submit = () => {
     if (!canSubmit) return;
-    onStartRun(effectiveMachine, projectPath.trim(), instruction.trim());
+    if (canManaged) {
+      onStartManaged!(effectiveMachine, projectPath.trim(), instruction.trim());
+    } else {
+      onStartRun(effectiveMachine, projectPath.trim(), instruction.trim());
+    }
     setProjectPath('');
     setInstruction('');
   };
@@ -100,13 +116,30 @@ export function StartRunPanel({ machines, onStartRun, startRunPending }: Props) 
                 onChange={(e) => setInstruction(e.target.value)}
               />
             </label>
+            {onStartManaged && (
+              <label className="checkbox-field" data-testid="start-run-managed-field">
+                <input
+                  type="checkbox"
+                  data-testid="start-run-managed"
+                  checked={managed}
+                  onChange={(e) => setManaged(e.target.checked)}
+                />
+                <span>
+                  Managed mode — fully interactive (answer any question, full transcript)
+                </span>
+              </label>
+            )}
             <button
               type="submit"
               className="btn btn--primary"
               data-testid="start-run-submit"
               disabled={!canSubmit}
             >
-              {startRunPending ? 'Starting…' : 'Start run'}
+              {pending
+                ? 'Starting…'
+                : canManaged
+                  ? 'Start managed run'
+                  : 'Start run'}
             </button>
           </form>
         ))}

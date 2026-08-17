@@ -4,6 +4,7 @@ import com.claudedriver.agent.AgentClient
 import com.claudedriver.backend.config.Config
 import com.claudedriver.backend.persistence.AgentConnections
 import com.claudedriver.backend.persistence.Db
+import com.claudedriver.backend.persistence.TranscriptMessages
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.request.header
@@ -17,12 +18,15 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Timeout
 import java.io.File
 import java.nio.file.Files
+import java.util.concurrent.TimeUnit
 
 /**
  * LIVE end-to-end smoke test: a real backend (Netty + Postgres, real V1+V2 migrations) and a real
@@ -37,6 +41,7 @@ import java.nio.file.Files
 class SmokeTest {
 
     @Test
+    @Timeout(150, unit = TimeUnit.SECONDS)
     fun `live end-to-end monitoring smoke`() = runBlocking {
         val dbUrl = System.getenv("SMOKE_DB_URL")
         assumeTrue(dbUrl != null, "Set SMOKE_DB_URL (and optionally SMOKE_DB_USER/PASS) to run the live smoke test")
@@ -71,12 +76,28 @@ class SmokeTest {
                     ProcessBuilder("/bin/sh", "-c", "while IFS= read -r line; do printf '%s\\n' \"\$line\" >> '${dispatchLog.absolutePath}'; done")
                         .redirectErrorStream(true).start()
             }
+            // A fake SDK companion (Phase 4): emits a transcript line + a question, waits for the
+            // operator's answer on stdin, then records + ends — speaking the real bridge protocol.
+            val companionScript = File(agentDir, "fake-companion.sh")
+            companionScript.writeText(
+                "qid=\$(uuidgen)\n" +
+                    "printf '{\"kind\":\"transcript\",\"role\":\"assistant\",\"text\":\"starting\"}\\n'\n" +
+                    "printf '{\"kind\":\"question\",\"questionId\":\"%s\",\"text\":\"Which region?\"}\\n' \"\$qid\"\n" +
+                    "IFS= read -r _a\n" +
+                    "printf '{\"kind\":\"transcript\",\"role\":\"assistant\",\"text\":\"got answer\"}\\n'\n" +
+                    "printf '{\"kind\":\"ended\"}\\n'\n",
+            )
+            val managedLauncher = object : com.claudedriver.agent.CompanionLauncher {
+                override fun launch(claudeSessionId: String, projectPath: String?, instruction: String?): Process =
+                    ProcessBuilder("/bin/sh", companionScript.absolutePath).start()
+            }
             val agent = AgentClient(
                 serverBaseUrl = "http://127.0.0.1:${config.port}",
                 storageDir = agentDir,
                 hookReceiverPort = receiverPort,
                 settingsFile = File(agentDir, "claude-settings.json"),
                 launcher = fakeLauncher,
+                companionLauncher = managedLauncher,
             )
             agent.enroll(machineId.toString(), approved.code)
             println("• agent enrolled (received device certificate)")
@@ -153,7 +174,27 @@ class SmokeTest {
             waitUntil(15_000) { deps.control.list().any { it.id == stopId && it.status == "stopped" } }
             println("• stopped the session ✅")
 
-            println("\nSMOKE PASS — monitoring + alerts + approve/deny + start/dispatch/stop verified over real HTTP/WSS + Postgres.")
+            // 9) Managed session (Phase 4) — start_managed → companion asks a free-form question →
+            //    operator answers → the session continues (transcript recorded). Via the fake companion.
+            val managedId = deps.control.issue("start_managed", machineId, projectPath = "/tmp", instruction = "analyze", operator = "smoke-op")
+            waitUntil(15_000) { deps.control.list().any { it.id == managedId && it.status == "started" } }
+            waitUntil(15_000) { deps.managed.listQuestions().any { it.status == "pending" } }
+            val question = deps.managed.listQuestions().first { it.status == "pending" }
+            println("• managed session asked: '${question.text}' ✅")
+            deps.managed.answer(question.id, "eu-west", cancel = false, operator = "smoke-op")
+            waitUntil(15_000) { deps.managed.listQuestions().first { it.id == question.id }.status == "answered" }
+            // Wait for the POST-answer transcript line — proves the companion received the answer and
+            // continued (and will exit), so teardown is race-free.
+            waitUntil(15_000) {
+                transaction(db.database) {
+                    TranscriptMessages.selectAll().where {
+                        (TranscriptMessages.claudeSessionId eq question.claudeSessionId) and (TranscriptMessages.text eq "got answer")
+                    }.any()
+                }
+            }
+            println("• answered → managed session continued (transcript recorded) ✅")
+
+            println("\nSMOKE PASS — monitoring + alerts + approve/deny + start/dispatch/stop + managed Q&A verified over real HTTP/WSS + Postgres.")
             agentJob.cancel()
         } finally {
             http.close()

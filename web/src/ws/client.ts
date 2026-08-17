@@ -15,14 +15,18 @@ import {
   isAlertEventEnvelope,
   isApprovalEventEnvelope,
   isControlEventEnvelope,
+  isQuestionEventEnvelope,
   isSampleEventEnvelope,
   isSessionUpdateEnvelope,
+  isTranscriptEventEnvelope,
   type AlertEventPayload,
   type ApprovalEventPayload,
   type ControlEventPayload,
   type Envelope,
+  type QuestionEventPayload,
   type SampleEventPayload,
   type SessionUpdatePayload,
+  type TranscriptEventPayload,
 } from '../types';
 
 export type WsStatus = 'connecting' | 'open' | 'closed';
@@ -38,6 +42,10 @@ export interface OperatorWsCallbacks {
   onApprovalEvent?: (event: ApprovalEventPayload) => void;
   /** Phase 3: control command status change (`control_event`). */
   onControlEvent?: (event: ControlEventPayload) => void;
+  /** Phase 4: free-form question raised / resolved (`question_event`). */
+  onQuestionEvent?: (event: QuestionEventPayload) => void;
+  /** Phase 4: new managed-session transcript message (`transcript_event`). */
+  onTranscriptEvent?: (event: TranscriptEventPayload) => void;
   /** Any well-formed envelope, for callers that want the full stream. */
   onEnvelope?: (envelope: Envelope<unknown>) => void;
 }
@@ -85,6 +93,8 @@ export class OperatorWsClient {
       onAlertEvent: options.onAlertEvent,
       onApprovalEvent: options.onApprovalEvent,
       onControlEvent: options.onControlEvent,
+      onQuestionEvent: options.onQuestionEvent,
+      onTranscriptEvent: options.onTranscriptEvent,
       onEnvelope: options.onEnvelope,
     };
   }
@@ -146,6 +156,10 @@ export class OperatorWsClient {
       this.opts.onApprovalEvent?.(envelope.payload);
     } else if (isControlEventEnvelope(envelope)) {
       this.opts.onControlEvent?.(envelope.payload);
+    } else if (isQuestionEventEnvelope(envelope)) {
+      this.opts.onQuestionEvent?.(envelope.payload);
+    } else if (isTranscriptEventEnvelope(envelope)) {
+      this.opts.onTranscriptEvent?.(envelope.payload);
     }
   }
 

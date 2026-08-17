@@ -10,6 +10,7 @@ import com.claudedriver.backend.connection.TrustService
 import com.claudedriver.backend.approvals.ApprovalService
 import com.claudedriver.backend.control.ControlService
 import com.claudedriver.backend.enrollment.EnrollmentService
+import com.claudedriver.backend.managed.ManagedService
 import com.claudedriver.backend.monitoring.AlertService
 import com.claudedriver.backend.monitoring.AttentionClassifier
 import com.claudedriver.backend.monitoring.Publisher
@@ -59,6 +60,7 @@ class AppDeps(
     val approvals: ApprovalService,
     val devices: DeviceStore,
     val control: ControlService,
+    val managed: ManagedService,
 ) {
     companion object {
         fun create(config: Config, database: Database): AppDeps {
@@ -78,6 +80,7 @@ class AppDeps(
             val push = PushService(devices, LoggingPushSender())
             val approvals = ApprovalService(database, audit, publisher, agentHub, push)
             val control = ControlService(database, audit, publisher, agentHub, approvals)
+            val managed = ManagedService(database, audit, publisher, agentHub)
             return AppDeps(
                 config = config,
                 database = database,
@@ -95,6 +98,7 @@ class AppDeps(
                 approvals = approvals,
                 devices = devices,
                 control = control,
+                managed = managed,
             )
         }
     }

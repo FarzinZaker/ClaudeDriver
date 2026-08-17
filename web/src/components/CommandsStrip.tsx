@@ -9,6 +9,7 @@ export const CONTROL_TYPE_LABEL: Record<ControlCommandType, string> = {
   start_run: 'Start run',
   dispatch_task: 'Send task',
   stop_session: 'Stop session',
+  start_managed: 'Start managed',
 };
 
 /** Human labels for a command's lifecycle status. */

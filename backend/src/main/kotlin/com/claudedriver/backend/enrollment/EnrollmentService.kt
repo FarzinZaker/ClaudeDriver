@@ -119,6 +119,22 @@ class EnrollmentService(
         audit.append(actor, AuditAction.MACHINE_REVOKED, machineId.toString())
     }
 
+    /** Hardening: revoke the machine's active device certs, drop its connection, and mint a fresh
+     *  enrollment (rotation). The old identity stops working; the agent re-enrolls with the new code. */
+    fun rotateDeviceCert(machineId: UUID, actor: String): ApprovedEnrollment {
+        transaction(db) {
+            DeviceCertificates.update({ (DeviceCertificates.machineId eq machineId) and (DeviceCertificates.status eq "active") }) {
+                it[status] = "revoked"
+            }
+            AgentConnections.update({ (AgentConnections.machineId eq machineId) and (AgentConnections.state eq "connected") }) {
+                it[state] = "disconnected"
+                it[disconnectedAt] = Instant.now()
+            }
+        }
+        audit.append(actor, AuditAction.CERT_ROTATED, machineId.toString())
+        return approveEnrollment(machineId, actor)
+    }
+
     private fun randomCode(): String {
         val bytes = ByteArray(24).also { random.nextBytes(it) }
         return bytes.joinToString("") { "%02x".format(it) }
