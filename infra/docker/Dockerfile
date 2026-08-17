@@ -1,5 +1,15 @@
 # syntax=docker/dockerfile:1
 
+# ---- Stage 0: build the React operator dashboard ----
+# Produces web/dist/ (static SPA), served same-origin by the backend so the
+# WebAuthn RP ID / origin match the API host.
+FROM node:22-alpine AS web
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+
 # ---- Stage 1: build the Ktor backend distribution with Gradle ----
 # Produces backend/build/install/backend/ (an install/distribution with a
 # launch script under bin/ and libs under lib/) via `:backend:installDist`.
@@ -31,6 +41,9 @@ WORKDIR /app
 
 # Copy only the built distribution from the build stage.
 COPY --from=build --chown=app:app /src/backend/build/install/backend/ /app/
+
+# Copy the built SPA; the backend serves it from WEB_ROOT (default "web" → /app/web).
+COPY --from=web --chown=app:app /web/dist/ /app/web/
 
 USER app
 

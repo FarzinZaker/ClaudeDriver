@@ -71,6 +71,7 @@ import io.ktor.server.sessions.sessions
 import io.ktor.server.sessions.set
 import io.ktor.server.websocket.DefaultWebSocketServerSession
 import io.ktor.server.websocket.webSocket
+import io.ktor.server.http.content.singlePageApplication
 import io.ktor.websocket.CloseReason
 import io.ktor.websocket.Frame
 import io.ktor.websocket.close
@@ -395,6 +396,19 @@ fun Application.configureRouting(deps: AppDeps) = routing {
     // ---- Agent WebSocket: negotiate + relay sample events ----
     webSocket("/agent/connect") {
         handleAgentConnect(deps)
+    }
+
+    // ---- Operator dashboard (React SPA) ----
+    // Served same-origin so the WebAuthn RP ID / origin match the API host. The built
+    // frontend lives at WEB_ROOT (default "web" → /app/web in the container image). The
+    // explicit API and WebSocket routes above are more specific and take precedence;
+    // any unmatched path falls back to index.html for client-side routing.
+    val webRoot = System.getenv("WEB_ROOT")?.takeIf { it.isNotBlank() } ?: "web"
+    if (java.io.File(webRoot).isDirectory) {
+        singlePageApplication {
+            filesPath = webRoot
+            defaultPage = "index.html"
+        }
     }
 }
 
