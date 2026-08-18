@@ -5,3 +5,4 @@ dist-ssr
 .vite
 coverage
 *.tsbuildinfo
+live-shim-capture.log

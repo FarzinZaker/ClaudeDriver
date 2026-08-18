@@ -42,20 +42,20 @@ object HookInstaller {
      * Pure: return a settings object with our managed hooks installed. The loopback receiver's token
      * is baked directly into the Authorization header (no env var), so hooks authenticate for every
      * Claude Code session started normally — nothing to export in the session's shell.
+     *
+     * Only NON-BLOCKING activity hooks are installed (Notification/Stop/SessionStart/SessionEnd →
+     * /hook). We deliberately do NOT install a blocking PreToolUse approval hook: it would gate every
+     * Bash/Write/Edit in the operator's OWN Claude Code sessions on this machine (including the one
+     * driving this agent) behind a dashboard decision. The live PTY terminal is the control surface;
+     * monitoring hooks only observe.
      */
     fun install(root: JsonObject, port: Int, token: String): JsonObject {
-        // Activity hooks (non-blocking, → /hook) and the blocking approval hook (→ /approve).
         val activityGroup = group("http://127.0.0.1:$port/hook", token, matcher = null, timeoutSeconds = null)
-        val approvalGroup = group("http://127.0.0.1:$port/approve", token, matcher = "Bash|Write|Edit", timeoutSeconds = 86400)
         val existingHooks = root["hooks"] as? JsonObject ?: JsonObject(emptyMap())
         val newHooks = buildJsonObject {
-            for (event in (existingHooks.keys + MANAGED_EVENTS + "PreToolUse").distinct()) {
+            for (event in (existingHooks.keys + MANAGED_EVENTS).distinct()) {
                 val prior = (existingHooks[event] as? JsonArray)?.filterNot { isManaged(it) } ?: emptyList()
-                val arr = when {
-                    event == "PreToolUse" -> prior + approvalGroup
-                    event in MANAGED_EVENTS -> prior + activityGroup
-                    else -> prior
-                }
+                val arr = if (event in MANAGED_EVENTS) prior + activityGroup else prior
                 put(event, JsonArray(arr))
             }
         }

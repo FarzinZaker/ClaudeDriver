@@ -161,7 +161,7 @@ class AgentClient(
         // Monitoring setup: token, managed Claude Code hooks, loopback receiver, process monitor.
         val hookToken = loadOrCreateHookToken()
         HookInstaller.installToFile(settingsFile, hookReceiverPort, hookToken)
-        println("Installed Claude Code monitoring + approval hooks → 127.0.0.1:$hookReceiverPort (auth baked in)")
+        println("Installed Claude Code monitoring hooks (non-blocking) → 127.0.0.1:$hookReceiverPort (auth baked in)")
 
         HookReceiver(
             port = hookReceiverPort,
