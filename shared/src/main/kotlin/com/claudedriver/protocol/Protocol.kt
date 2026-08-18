@@ -15,7 +15,7 @@ import kotlinx.serialization.json.encodeToJsonElement
  */
 
 /** Current contract version. Bump in the same change set as any wire change. */
-const val PROTOCOL_VERSION: String = "0.5.0"
+const val PROTOCOL_VERSION: String = "0.6.0"
 
 /** Message type discriminators carried in the envelope `type` field. */
 object MessageType {
@@ -50,6 +50,14 @@ object MessageType {
     const val TRANSCRIPT_MESSAGE = "transcript_message" // agent → backend (conversation line)
     const val QUESTION_EVENT = "question_event"         // backend → operator (live UI)
     const val TRANSCRIPT_EVENT = "transcript_event"     // backend → operator (live UI)
+
+    // Phase 5 (live terminal) — the transparent PTY wrapper
+    const val TERMINAL_OPENED = "terminal_opened"   // agent → backend (a claude shim attached)
+    const val TERMINAL_OUTPUT = "terminal_output"   // agent → backend (raw PTY output, base64)
+    const val TERMINAL_CLOSED = "terminal_closed"   // agent → backend (the shim/child exited)
+    const val TERMINAL_INPUT = "terminal_input"     // operator → backend → agent (keystrokes, base64)
+    const val TERMINAL_EVENT = "terminal_event"     // backend → operator (terminal opened/closed)
+    const val TERMINAL_DATA = "terminal_data"       // backend → operator (output chunk, base64)
 }
 
 /**
@@ -283,6 +291,59 @@ data class TranscriptEvent(
     val machineId: String,
     val role: String,
     val text: String,
+    val at: String,
+)
+
+// ---- Phase 5 payload types (live terminal / transparent PTY wrapper) --------------------------
+
+@kotlinx.serialization.Serializable
+data class TerminalOpened(
+    val sid: String,
+    val cwd: String,
+    val cols: Int,
+    val rows: Int,
+    val at: String,
+)
+
+@kotlinx.serialization.Serializable
+data class TerminalOutput(
+    val sid: String,
+    val dataB64: String,
+    val at: String,
+)
+
+@kotlinx.serialization.Serializable
+data class TerminalClosed(
+    val sid: String,
+    val exitCode: Int,
+    val at: String,
+)
+
+/** Operator keystrokes. [terminalId] is "machineId:sid"; the agent uses the sid half. */
+@kotlinx.serialization.Serializable
+data class TerminalInput(
+    val terminalId: String,
+    val dataB64: String,
+)
+
+@kotlinx.serialization.Serializable
+data class TerminalEvent(
+    val terminalId: String, // "machineId:sid"
+    val machineId: String,
+    val machineName: String,
+    val sid: String,
+    val cwd: String,
+    val cols: Int,
+    val rows: Int,
+    val status: String, // open | closed
+    val at: String,
+    val exitCode: Int? = null,
+)
+
+@kotlinx.serialization.Serializable
+data class TerminalData(
+    val terminalId: String,
+    val dataB64: String,
     val at: String,
 )
 

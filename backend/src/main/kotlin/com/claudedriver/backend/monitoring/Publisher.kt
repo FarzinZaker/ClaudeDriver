@@ -8,6 +8,8 @@ import com.claudedriver.protocol.ControlEvent
 import com.claudedriver.protocol.MessageType
 import com.claudedriver.protocol.QuestionEvent
 import com.claudedriver.protocol.SessionUpdate
+import com.claudedriver.protocol.TerminalData
+import com.claudedriver.protocol.TerminalEvent
 import com.claudedriver.protocol.TranscriptEvent
 import java.util.concurrent.atomic.AtomicLong
 
@@ -37,5 +39,13 @@ class Publisher(private val hub: OperatorHub) {
 
     suspend fun transcriptEvent(event: TranscriptEvent) {
         hub.broadcast(Codec.encode(Codec.envelope(MessageType.TRANSCRIPT_EVENT, seq.incrementAndGet(), event)))
+    }
+
+    suspend fun terminalEvent(event: TerminalEvent) {
+        hub.broadcast(Codec.encode(Codec.envelope(MessageType.TERMINAL_EVENT, seq.incrementAndGet(), event)))
+    }
+
+    suspend fun terminalData(data: TerminalData) {
+        hub.broadcast(Codec.encode(Codec.envelope(MessageType.TERMINAL_DATA, seq.incrementAndGet(), data)))
     }
 }

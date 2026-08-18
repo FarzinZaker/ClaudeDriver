@@ -18,7 +18,10 @@ import {
   isQuestionEventEnvelope,
   isSampleEventEnvelope,
   isSessionUpdateEnvelope,
+  isTerminalDataEnvelope,
+  isTerminalEventEnvelope,
   isTranscriptEventEnvelope,
+  PROTOCOL_VERSION,
   type AlertEventPayload,
   type ApprovalEventPayload,
   type ControlEventPayload,
@@ -26,6 +29,8 @@ import {
   type QuestionEventPayload,
   type SampleEventPayload,
   type SessionUpdatePayload,
+  type TerminalDataPayload,
+  type TerminalEventPayload,
   type TranscriptEventPayload,
 } from '../types';
 
@@ -46,6 +51,10 @@ export interface OperatorWsCallbacks {
   onQuestionEvent?: (event: QuestionEventPayload) => void;
   /** Phase 4: new managed-session transcript message (`transcript_event`). */
   onTranscriptEvent?: (event: TranscriptEventPayload) => void;
+  /** Phase 5: a live terminal opened or closed (`terminal_event`). */
+  onTerminalEvent?: (event: TerminalEventPayload) => void;
+  /** Phase 5: a chunk of live terminal output (`terminal_data`). */
+  onTerminalData?: (event: TerminalDataPayload) => void;
   /** Any well-formed envelope, for callers that want the full stream. */
   onEnvelope?: (envelope: Envelope<unknown>) => void;
 }
@@ -95,8 +104,27 @@ export class OperatorWsClient {
       onControlEvent: options.onControlEvent,
       onQuestionEvent: options.onQuestionEvent,
       onTranscriptEvent: options.onTranscriptEvent,
+      onTerminalEvent: options.onTerminalEvent,
+      onTerminalData: options.onTerminalData,
       onEnvelope: options.onEnvelope,
     };
+  }
+
+  /** Send operator keystrokes to a live terminal (base64). No-op if the socket is not open. */
+  sendTerminalInput(terminalId: string, dataB64: string): void {
+    const socket = this.socket;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    const envelope = {
+      protocolVersion: PROTOCOL_VERSION,
+      type: 'terminal_input',
+      seq: 0,
+      payload: { terminalId, dataB64 },
+    };
+    try {
+      socket.send(JSON.stringify(envelope));
+    } catch {
+      /* dropped keystroke on a racing close — the user will retype */
+    }
   }
 
   connect(): void {
@@ -160,6 +188,10 @@ export class OperatorWsClient {
       this.opts.onQuestionEvent?.(envelope.payload);
     } else if (isTranscriptEventEnvelope(envelope)) {
       this.opts.onTranscriptEvent?.(envelope.payload);
+    } else if (isTerminalEventEnvelope(envelope)) {
+      this.opts.onTerminalEvent?.(envelope.payload);
+    } else if (isTerminalDataEnvelope(envelope)) {
+      this.opts.onTerminalData?.(envelope.payload);
     }
   }
 

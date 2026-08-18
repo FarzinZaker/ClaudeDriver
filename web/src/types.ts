@@ -10,7 +10,7 @@
  */
 
 /** Semver of the shared protocol contract this client speaks. */
-export const PROTOCOL_VERSION = '0.5.0';
+export const PROTOCOL_VERSION = '0.6.0';
 
 // ---------------------------------------------------------------------------
 // REST — GET /status
@@ -594,4 +594,72 @@ export function isTranscriptEventEnvelope(
     typeof p.text === 'string' &&
     typeof p.at === 'string'
   );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5 — Live terminal (the transparent PTY wrapper)
+// ---------------------------------------------------------------------------
+
+/** A live (or just-closed) terminal mirrored from a `claude` shim. */
+export interface TerminalSummary {
+  /** Globally unique id, "machineId:sid". */
+  terminalId: string;
+  machineId: string;
+  machineName: string;
+  sid: string;
+  cwd: string;
+  cols: number;
+  rows: number;
+  status: 'open' | 'closed';
+  openedAt: string;
+  exitCode?: number | null;
+}
+
+export interface TerminalsResponse {
+  terminals: TerminalSummary[];
+}
+
+export interface TerminalScrollbackResponse {
+  terminalId: string;
+  /** base64 of the recent PTY output tail. */
+  dataB64: string;
+}
+
+/** `terminal_event` — a terminal opened or closed. */
+export type TerminalEventPayload = TerminalSummary;
+
+export type TerminalEventEnvelope = Envelope<TerminalEventPayload> & {
+  type: 'terminal_event';
+};
+
+export function isTerminalEventEnvelope(
+  env: Envelope<unknown>,
+): env is TerminalEventEnvelope {
+  if (env.type !== 'terminal_event') return false;
+  const p = env.payload as Partial<TerminalEventPayload> | null;
+  return (
+    !!p &&
+    typeof p.terminalId === 'string' &&
+    typeof p.machineId === 'string' &&
+    typeof p.status === 'string'
+  );
+}
+
+/** `terminal_data` — a chunk of live PTY output, base64-encoded. */
+export interface TerminalDataPayload {
+  terminalId: string;
+  dataB64: string;
+  at: string;
+}
+
+export type TerminalDataEnvelope = Envelope<TerminalDataPayload> & {
+  type: 'terminal_data';
+};
+
+export function isTerminalDataEnvelope(
+  env: Envelope<unknown>,
+): env is TerminalDataEnvelope {
+  if (env.type !== 'terminal_data') return false;
+  const p = env.payload as Partial<TerminalDataPayload> | null;
+  return !!p && typeof p.terminalId === 'string' && typeof p.dataB64 === 'string';
 }

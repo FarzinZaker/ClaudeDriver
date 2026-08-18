@@ -17,6 +17,9 @@ import type {
   SessionSummary,
   SessionsResponse,
   StatusResponse,
+  TerminalScrollbackResponse,
+  TerminalSummary,
+  TerminalsResponse,
   TranscriptMessage,
   TranscriptResponse,
 } from './types';
@@ -133,6 +136,35 @@ export async function fetchApprovals(): Promise<ApprovalSummary[]> {
   const body = (await res.json()) as ApprovalsResponse;
   return body.approvals ?? [];
 }
+
+/** Lists live + recently-closed terminals mirrored from the PTY wrapper (`GET /terminals`). */
+export async function fetchTerminals(): Promise<TerminalSummary[]> {
+  const res = await fetch('/terminals', {
+    credentials: 'include',
+    headers: { accept: 'application/json' },
+  });
+  if (!res.ok) {
+    throw new ApiError(`GET /terminals failed: ${res.status}`, res.status);
+  }
+  const body = (await res.json()) as TerminalsResponse;
+  return body.terminals ?? [];
+}
+
+/** Fetches the recent output tail (base64) for a terminal, for rendering scrollback on attach. */
+export async function fetchTerminalScrollback(terminalId: string): Promise<string> {
+  const res = await fetch(`/terminals/${encodeURIComponent(terminalId)}/scrollback`, {
+    credentials: 'include',
+    headers: { accept: 'application/json' },
+  });
+  if (!res.ok) {
+    throw new ApiError(`GET /terminals/${terminalId}/scrollback failed: ${res.status}`, res.status);
+  }
+  const body = (await res.json()) as TerminalScrollbackResponse;
+  return body.dataB64 ?? '';
+}
+
+/** TanStack Query key for the live-terminals list. */
+export const TERMINALS_QUERY_KEY = ['terminals'] as const;
 
 /** Outcome of a decide call: either it applied, or it was already resolved. */
 export type DecideResult =

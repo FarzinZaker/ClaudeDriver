@@ -12,6 +12,10 @@ import com.claudedriver.protocol.MessageType
 import com.claudedriver.protocol.PROTOCOL_VERSION
 import com.claudedriver.protocol.Pong
 import com.claudedriver.protocol.SampleEvent
+import com.claudedriver.protocol.TerminalClosed
+import com.claudedriver.protocol.TerminalInput
+import com.claudedriver.protocol.TerminalOpened
+import com.claudedriver.protocol.TerminalOutput
 import com.claudedriver.protocol.VersionMismatch
 import kotlinx.coroutines.CompletableDeferred
 import java.util.concurrent.ConcurrentHashMap
@@ -43,6 +47,7 @@ import kotlinx.serialization.json.encodeToJsonElement
 import java.io.File
 import java.security.KeyStore
 import java.time.Instant
+import java.util.Base64
 import kotlin.random.Random
 
 @Serializable
@@ -73,6 +78,7 @@ class AgentClient(
 ) {
     private var sessionController: SessionController? = null
     private var managedController: ManagedSessionController? = null
+    private var ptyBridge: PtyBridge? = null
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     // Enrolled device cert + key, loaded as a client keystore for mutual TLS to the ALB. Null until
@@ -190,6 +196,15 @@ class AgentClient(
             emitTranscript = { message -> emit(MessageType.TRANSCRIPT_MESSAGE, message) },
         )
 
+        // Live terminal: accept transparent `claude` shim connections and mirror them upstream.
+        ptyBridge = PtyBridge(
+            storageDir = storageDir,
+            onOpen = { s -> emit(MessageType.TERMINAL_OPENED, TerminalOpened(s.sid, s.cwd, s.cols, s.rows, Instant.now().toString())) },
+            onOutput = { sid, bytes -> emit(MessageType.TERMINAL_OUTPUT, TerminalOutput(sid, Base64.getEncoder().encodeToString(bytes), Instant.now().toString())) },
+            onResize = { _, _, _ -> },
+            onClose = { sid, code -> emit(MessageType.TERMINAL_CLOSED, TerminalClosed(sid, code, Instant.now().toString())) },
+        ).also { println("PTY bridge listening for claude shims on 127.0.0.1:${it.start()}") }
+
         var attempt = 0
         while (true) {
             try {
@@ -250,6 +265,12 @@ class AgentClient(
                         MessageType.QUESTION_ANSWER -> {
                             val answer = Codec.decodePayload<QuestionAnswer>(env)
                             launch { managedController?.answer(answer) }
+                        }
+
+                        MessageType.TERMINAL_INPUT -> {
+                            val input = Codec.decodePayload<TerminalInput>(env)
+                            val sid = input.terminalId.substringAfter(':')
+                            runCatching { ptyBridge?.inject(sid, Base64.getDecoder().decode(input.dataB64)) }
                         }
                     }
                 }

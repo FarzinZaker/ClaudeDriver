@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ackAlert,
@@ -54,6 +54,13 @@ import type {
   TranscriptMessage,
 } from './types';
 import { OperatorWsClient, operatorWsUrl, type WsStatus } from './ws/client';
+import { TerminalsPanel } from './components/TerminalsPanel';
+import { emitTerminalData } from './terminal/terminalBus';
+import {
+  fetchTerminals,
+  TERMINALS_QUERY_KEY,
+} from './api';
+import type { TerminalSummary } from './types';
 
 const MAX_INBOX = 50;
 
@@ -285,6 +292,8 @@ export default function App() {
   const queryClient = useQueryClient();
   const [wsStatus, setWsStatus] = useState<WsStatus>('closed');
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedTerminalId, setSelectedTerminalId] = useState<string | null>(null);
+  const wsClientRef = useRef<OperatorWsClient | null>(null);
   const [approvalNotes, setApprovalNotes] = useState<Record<string, string>>({});
   const [questionNotes, setQuestionNotes] = useState<Record<string, string>>({});
   const [searchTerm, setSearchTerm] = useState('');
@@ -328,6 +337,12 @@ export default function App() {
   const questionsQuery = useQuery({
     queryKey: QUESTIONS_QUERY_KEY,
     queryFn: fetchQuestions,
+    enabled: authenticated,
+  });
+
+  const terminalsQuery = useQuery({
+    queryKey: TERMINALS_QUERY_KEY,
+    queryFn: fetchTerminals,
     enabled: authenticated,
   });
 
@@ -624,6 +639,30 @@ export default function App() {
     [queryClient],
   );
 
+  // A terminal opened/closed: upsert it into the live list (open ones first).
+  const onTerminalEvent = useCallback(
+    (event: TerminalSummary) => {
+      queryClient.setQueryData<TerminalSummary[]>(TERMINALS_QUERY_KEY, (prev) => {
+        const rest = (prev ?? []).filter((t) => t.terminalId !== event.terminalId);
+        return [event, ...rest];
+      });
+    },
+    [queryClient],
+  );
+
+  // Live output → route to the attached xterm via the bus (no re-render).
+  const onTerminalData = useCallback(
+    (event: { terminalId: string; dataB64: string }) => {
+      emitTerminalData(event.terminalId, event.dataB64);
+    },
+    [],
+  );
+
+  // Send operator keystrokes to a terminal over the live socket.
+  const handleTerminalInput = useCallback((terminalId: string, dataB64: string) => {
+    wsClientRef.current?.sendTerminalInput(terminalId, dataB64);
+  }, []);
+
   // Open the operator WS only while authenticated; tear down on logout/unmount.
   useEffect(() => {
     if (!authenticated) {
@@ -639,9 +678,15 @@ export default function App() {
       onControlEvent,
       onQuestionEvent,
       onTranscriptEvent,
+      onTerminalEvent,
+      onTerminalData,
     });
+    wsClientRef.current = client;
     client.connect();
-    return () => client.close();
+    return () => {
+      client.close();
+      wsClientRef.current = null;
+    };
   }, [
     authenticated,
     onSampleEvent,
@@ -651,6 +696,8 @@ export default function App() {
     onControlEvent,
     onQuestionEvent,
     onTranscriptEvent,
+    onTerminalEvent,
+    onTerminalData,
   ]);
 
   const handleAuthenticated = useCallback(() => {
@@ -752,6 +799,12 @@ export default function App() {
         searchResults={searchQuery.data}
         searchTerm={searchTerm}
         searchPending={searchQuery.isFetching}
+      />
+      <TerminalsPanel
+        terminals={terminalsQuery.data ?? []}
+        selectedId={selectedTerminalId}
+        onSelect={setSelectedTerminalId}
+        onInput={handleTerminalInput}
       />
       {selectedSessionId != null && (
         <SessionDetailModal

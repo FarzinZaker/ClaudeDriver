@@ -11,6 +11,8 @@ import com.claudedriver.backend.api.RegisterRequest
 import com.claudedriver.backend.api.LoginRequest
 import com.claudedriver.backend.api.WhoAmIResponse
 import com.claudedriver.backend.api.AlertsResponse
+import com.claudedriver.backend.api.TerminalsResponse
+import com.claudedriver.backend.api.TerminalScrollbackResponse
 import com.claudedriver.backend.api.ApprovalsResponse
 import com.claudedriver.backend.api.CommandAcceptedResponse
 import com.claudedriver.backend.api.CommandsResponse
@@ -39,6 +41,10 @@ import com.claudedriver.protocol.ApprovalRequest
 import com.claudedriver.protocol.Codec
 import com.claudedriver.protocol.ControlResult
 import com.claudedriver.protocol.QuestionRaised
+import com.claudedriver.protocol.TerminalClosed
+import com.claudedriver.protocol.TerminalInput
+import com.claudedriver.protocol.TerminalOpened
+import com.claudedriver.protocol.TerminalOutput
 import com.claudedriver.protocol.TranscriptMessage
 import com.claudedriver.protocol.Envelope
 import com.claudedriver.protocol.HelloAck
@@ -270,6 +276,20 @@ fun Application.configureRouting(deps: AppDeps) = routing {
         call.respond(AlertsResponse(deps.alerts.list().map { it.toDto() }))
     }
 
+    // ---- Operator: live terminals (transparent PTY wrapper) ----
+    get("/terminals") {
+        requireOperator(deps) ?: return@get
+        call.respond(TerminalsResponse(deps.terminals.list().map { it.toDto() }))
+    }
+
+    get("/terminals/{id}/scrollback") {
+        requireOperator(deps) ?: return@get
+        val id = call.parameters["id"] ?: return@get call.respond(HttpStatusCode.BadRequest, ErrorResponse("bad_request", "missing id"))
+        val data = deps.terminals.scrollback(id)
+        if (data == null) call.respond(HttpStatusCode.NotFound, ErrorResponse("not_found", "No such terminal"))
+        else call.respond(TerminalScrollbackResponse(id, data))
+    }
+
     post("/alerts/{id}/ack") {
         requireOperator(deps) ?: return@post
         when (deps.alerts.acknowledge(UUID.fromString(call.parameters["id"]))) {
@@ -441,13 +461,23 @@ fun Application.configureRouting(deps: AppDeps) = routing {
 
     // ---- Operator WebSocket: receive live sample events ----
     webSocket("/ws/operator") {
-        if (call.sessions.get<OperatorSession>() == null) {
+        val session = call.sessions.get<OperatorSession>()
+        if (session == null) {
             close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "unauthenticated"))
             return@webSocket
         }
         deps.hub.addOperator(this)
         try {
-            for (frame in incoming) { /* operators are receive-only in Phase 0 */ }
+            // Operators are receive-only except for live-terminal keystrokes, which we route to the
+            // agent owning the terminal. Anything else is ignored.
+            for (frame in incoming) {
+                if (frame !is Frame.Text) continue
+                val env = runCatching { Codec.decode(frame.readText()) }.getOrNull() ?: continue
+                if (env.type == MessageType.TERMINAL_INPUT) {
+                    val input = runCatching { Codec.decodePayload<TerminalInput>(env) }.getOrNull() ?: continue
+                    deps.terminals.input(input, "operator:${session.handle}")
+                }
+            }
         } finally {
             deps.hub.removeOperator(this)
         }
@@ -573,6 +603,24 @@ private suspend fun DefaultWebSocketServerSession.handleAgentConnect(deps: AppDe
                 MessageType.TRANSCRIPT_MESSAGE -> {
                     val message = runCatching { Codec.decodePayload<TranscriptMessage>(env) }.getOrNull() ?: continue
                     deps.managed.storeTranscript(identity.machineId, message)
+                    deps.trust.updateLastSeq(connectionId, env.seq)
+                }
+
+                MessageType.TERMINAL_OPENED -> {
+                    val opened = runCatching { Codec.decodePayload<TerminalOpened>(env) }.getOrNull() ?: continue
+                    deps.terminals.opened(identity.machineId, opened)
+                    deps.trust.updateLastSeq(connectionId, env.seq)
+                }
+
+                MessageType.TERMINAL_OUTPUT -> {
+                    val output = runCatching { Codec.decodePayload<TerminalOutput>(env) }.getOrNull() ?: continue
+                    deps.terminals.output(identity.machineId, output)
+                    deps.trust.updateLastSeq(connectionId, env.seq)
+                }
+
+                MessageType.TERMINAL_CLOSED -> {
+                    val closed = runCatching { Codec.decodePayload<TerminalClosed>(env) }.getOrNull() ?: continue
+                    deps.terminals.closed(identity.machineId, closed)
                     deps.trust.updateLastSeq(connectionId, env.seq)
                 }
             }
