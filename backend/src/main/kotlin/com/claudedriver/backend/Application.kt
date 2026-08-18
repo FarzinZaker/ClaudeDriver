@@ -1,6 +1,7 @@
 package com.claudedriver.backend
 
 import com.claudedriver.backend.api.StatusService
+import com.claudedriver.backend.audit.AuditAction
 import com.claudedriver.backend.audit.AuditRepository
 import com.claudedriver.backend.auth.OperatorStore
 import com.claudedriver.backend.auth.PasswordAuthService
@@ -38,7 +39,10 @@ import io.ktor.server.websocket.WebSockets
 import io.ktor.server.websocket.pingPeriod
 import io.ktor.server.websocket.timeout
 import kotlinx.serialization.json.Json
+import com.claudedriver.backend.persistence.Machines
 import org.jetbrains.exposed.sql.Database
+import org.jetbrains.exposed.sql.selectAll
+import org.jetbrains.exposed.sql.transactions.transaction
 import org.slf4j.LoggerFactory
 import kotlin.time.Duration.Companion.seconds
 
@@ -98,7 +102,18 @@ class AppDeps(
             val approvals = ApprovalService(database, audit, publisher, agentHub, push)
             val control = ControlService(database, audit, publisher, agentHub, approvals)
             val managed = ManagedService(database, audit, publisher, agentHub)
-            val terminals = TerminalService(database, audit, publisher, agentHub)
+            val terminals = TerminalService(
+                publisher, agentHub,
+                machineNameOf = { machineId ->
+                    transaction(database) {
+                        Machines.selectAll().where { Machines.id eq machineId }.firstOrNull()?.get(Machines.name)
+                            ?: machineId.toString()
+                    }
+                },
+                auditInput = { operator, terminalId ->
+                    audit.append(operator, AuditAction.CONTROL_ISSUED, terminalId, """{"type":"terminal_input"}""")
+                },
+            )
             return AppDeps(
                 config = config,
                 database = database,

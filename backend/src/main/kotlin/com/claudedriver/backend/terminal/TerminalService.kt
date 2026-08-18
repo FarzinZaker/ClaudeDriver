@@ -1,9 +1,6 @@
 package com.claudedriver.backend.terminal
 
-import com.claudedriver.backend.audit.AuditAction
-import com.claudedriver.backend.audit.AuditRepository
 import com.claudedriver.backend.monitoring.Publisher
-import com.claudedriver.backend.persistence.Machines
 import com.claudedriver.backend.ws.AgentHub
 import com.claudedriver.protocol.Codec
 import com.claudedriver.protocol.MessageType
@@ -14,10 +11,6 @@ import com.claudedriver.protocol.TerminalInput
 import com.claudedriver.protocol.TerminalOpened
 import com.claudedriver.protocol.TerminalOutput
 import kotlinx.serialization.json.encodeToJsonElement
-import org.jetbrains.exposed.sql.Database
-import org.jetbrains.exposed.sql.selectAll
-import org.jetbrains.exposed.sql.transactions.transaction
-import java.time.Instant
 import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -36,10 +29,11 @@ data class TerminalInfo(
  * to a machine that is not connected is simply dropped (never queued to a stranger).
  */
 class TerminalService(
-    private val db: Database,
-    private val audit: AuditRepository,
     private val publisher: Publisher,
     private val agentHub: AgentHub,
+    private val machineNameOf: (UUID) -> String,
+    /** Audit sink for operator keystrokes: (operator, terminalId). */
+    private val auditInput: (String, String) -> Unit = { _, _ -> },
 ) {
     private class Live(
         val info: TerminalInfoMutable,
@@ -57,7 +51,7 @@ class TerminalService(
 
     suspend fun opened(machineId: UUID, opened: TerminalOpened) {
         val id = terminalId(machineId, opened.sid)
-        val name = machineName(machineId)
+        val name = machineNameOf(machineId)
         val info = TerminalInfoMutable(
             id, machineId.toString(), name, opened.sid, opened.cwd,
             opened.cols, opened.rows, "open", opened.at, null,
@@ -87,7 +81,7 @@ class TerminalService(
         val machineId = runCatching { UUID.fromString(input.terminalId.substringBefore(':')) }.getOrNull() ?: return
         val live = terminals[input.terminalId]
         if (live == null || live.info.status != "open") return
-        audit.append(operator, AuditAction.CONTROL_ISSUED, input.terminalId, """{"type":"terminal_input"}""")
+        runCatching { auditInput(operator, input.terminalId) }
         agentHub.offer(machineId, MessageType.TERMINAL_INPUT, Codec.json.encodeToJsonElement(input))
     }
 
@@ -109,10 +103,6 @@ class TerminalService(
             .sortedBy { it.info.openedAt }
             .take(terminals.size - MAX_TERMINALS)
             .forEach { terminals.remove(it.info.terminalId) }
-    }
-
-    private fun machineName(machineId: UUID): String = transaction(db) {
-        Machines.selectAll().where { Machines.id eq machineId }.firstOrNull()?.get(Machines.name) ?: machineId.toString()
     }
 
     companion object {

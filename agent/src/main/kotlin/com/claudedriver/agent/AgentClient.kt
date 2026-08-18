@@ -196,6 +196,18 @@ class AgentClient(
             emitTranscript = { message -> emit(MessageType.TRANSCRIPT_MESSAGE, message) },
         )
 
+        // Put the transparent `claude` shim ahead of the real binary so ordinary sessions mirror
+        // with nothing special to run. Only new shells pick it up (existing ones are untouched),
+        // and it self-skips when no real claude is resolvable. Best-effort — never fatal.
+        runCatching {
+            val home = File(System.getProperty("user.home"))
+            if (ShimInstaller.install(home)) {
+                println("Installed transparent claude shim → ${ShimInstaller.shimFile(home).path} (new shells mirror automatically)")
+            } else {
+                println("Skipped claude shim install (no real claude found on PATH to wrap)")
+            }
+        }.onFailure { println("claude shim install skipped: ${it.message}") }
+
         // Live terminal: accept transparent `claude` shim connections and mirror them upstream.
         ptyBridge = PtyBridge(
             storageDir = storageDir,
