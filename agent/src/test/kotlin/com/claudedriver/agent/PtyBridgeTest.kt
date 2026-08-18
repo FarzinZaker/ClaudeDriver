@@ -37,7 +37,7 @@ class PtyBridgeTest {
         val closeLatch = CountDownLatch(1)
 
         val bridge = PtyBridge(
-            storageDir = dir,
+            endpointDir = dir,
             onOpen = { opened.add(it); openLatch.countDown() },
             onOutput = { _, b -> output.add(b) },
             onResize = { _, c, r -> resizes.add(c to r) },
@@ -85,7 +85,7 @@ class PtyBridgeTest {
         val dir = Files.createTempDirectory("pty").toFile()
         val opened = ConcurrentLinkedQueue<TerminalSession>()
         val bridge = PtyBridge(
-            storageDir = dir,
+            endpointDir = dir,
             onOpen = { opened.add(it) },
             onOutput = { _, _ -> },
             onResize = { _, _, _ -> },

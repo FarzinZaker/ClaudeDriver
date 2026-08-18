@@ -209,8 +209,10 @@ class AgentClient(
         }.onFailure { println("claude shim install skipped: ${it.message}") }
 
         // Live terminal: accept transparent `claude` shim connections and mirror them upstream.
+        // The handshake file must land where the shim looks (~/.claudedriver), NOT the agent's
+        // storage dir (the launchd plist points that at ~/.claudedriver-agent).
         ptyBridge = PtyBridge(
-            storageDir = storageDir,
+            endpointDir = File(System.getProperty("user.home"), ".claudedriver"),
             onOpen = { s -> emit(MessageType.TERMINAL_OPENED, TerminalOpened(s.sid, s.cwd, s.cols, s.rows, Instant.now().toString())) },
             onOutput = { sid, bytes -> emit(MessageType.TERMINAL_OUTPUT, TerminalOutput(sid, Base64.getEncoder().encodeToString(bytes), Instant.now().toString())) },
             onResize = { _, _, _ -> },

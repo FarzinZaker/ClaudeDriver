@@ -29,7 +29,10 @@ data class TerminalSession(val sid: String, val cwd: String, var cols: Int, var 
  *   agent → shim : I input-bytes
  */
 class PtyBridge(
-    private val storageDir: File,
+    // Where the `pty-endpoint` handshake file is written. MUST match where the shim reads it
+    // (`~/.claudedriver/pty-endpoint`), independent of the agent's own storage dir — which the
+    // launchd plist points elsewhere (`~/.claudedriver-agent`). Tests pass a temp dir here.
+    private val endpointDir: File,
     private val onOpen: (TerminalSession) -> Unit,
     private val onOutput: (String, ByteArray) -> Unit,
     private val onResize: (String, Int, Int) -> Unit,
@@ -136,12 +139,12 @@ class PtyBridge(
     }
 
     private fun writeEndpoint(port: Int) {
-        storageDir.mkdirs()
+        endpointDir.mkdirs()
         endpointFile.writeText("""{"port":$port,"token":"$token"}""")
         runCatching { endpointFile.setReadable(false, false); endpointFile.setReadable(true, true) } // owner-only
     }
 
-    private val endpointFile get() = File(storageDir, "pty-endpoint")
+    private val endpointFile get() = File(endpointDir, "pty-endpoint")
 
     private fun str(o: JsonObject, k: String): String? = o[k]?.jsonPrimitive?.contentOrNull
     private fun intOf(o: JsonObject, k: String, default: Int): Int = o[k]?.jsonPrimitive?.intOrNull ?: default
