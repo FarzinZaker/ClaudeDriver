@@ -25,7 +25,7 @@ import java.time.Instant
 import java.util.UUID
 
 /** A target session resolved from its backend id. */
-data class SessionTarget(val machineId: UUID, val claudeSessionId: String?)
+data class SessionTarget(val machineId: UUID, val claudeSessionId: String?, val projectPath: String?)
 
 data class CommandInfo(
     val id: UUID, val machineId: UUID, val machineName: String, val type: String,
@@ -49,7 +49,7 @@ class ControlService(
 
     fun sessionTarget(sessionId: UUID): SessionTarget? = transaction(db) {
         Sessions.selectAll().where { Sessions.id eq sessionId }.firstOrNull()
-            ?.let { SessionTarget(it[Sessions.machineId], it[Sessions.claudeSessionId]) }
+            ?.let { SessionTarget(it[Sessions.machineId], it[Sessions.claudeSessionId], it[Sessions.projectPath]) }
     }
 
     /** Persist + route a control command; returns its id. */

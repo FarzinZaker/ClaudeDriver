@@ -3,6 +3,8 @@ package com.claudedriver.agent
 import com.claudedriver.protocol.ActivityEvent
 import com.claudedriver.protocol.ControlCommand
 import com.claudedriver.protocol.ControlResult
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.time.Instant
 import java.util.UUID
@@ -67,18 +69,78 @@ class SessionController(
 
     private suspend fun dispatch(command: ControlCommand) {
         val sessionId = command.claudeSessionId
+        // Agent-launched session: write straight to its stdin.
         val managed = sessionId?.let { sessions[it] }
-        if (managed == null || !managed.process.isAlive) {
-            emitResult(ControlResult(command.commandId, "undeliverable", sessionId, "no managed session ready"))
+        if (managed != null && managed.process.isAlive) {
+            try {
+                managed.stdin.appendLine(command.instruction ?: "")
+                managed.stdin.flush()
+                emitResult(ControlResult(command.commandId, "delivered", sessionId, null))
+            } catch (e: Exception) {
+                emitResult(ControlResult(command.commandId, "undeliverable", sessionId, e.message))
+            }
             return
         }
-        try {
-            managed.stdin.appendLine(command.instruction ?: "")
-            managed.stdin.flush()
-            emitResult(ControlResult(command.commandId, "delivered", sessionId, null))
-        } catch (e: Exception) {
-            emitResult(ControlResult(command.commandId, "undeliverable", sessionId, e.message))
+        // Detected session: drive the real `claude` (runs as this user, so it uses the user's Claude
+        // auth) by continuing the session in its project directory. A real claude session id, when
+        // known, resumes that exact session; otherwise --continue picks the latest one in the cwd.
+        dispatchToRealClaude(command)
+    }
+
+    private suspend fun dispatchToRealClaude(command: ControlCommand) {
+        val cwd = command.projectPath?.takeIf { File(it).isDirectory }
+        val task = command.instruction?.takeIf { it.isNotBlank() }
+        if (cwd == null || task == null) {
+            emitResult(ControlResult(command.commandId, "undeliverable", command.claudeSessionId, "no project directory or task"))
+            return
         }
+        val claude = resolveClaude()
+            ?: run {
+                emitResult(ControlResult(command.commandId, "undeliverable", command.claudeSessionId, "claude CLI not found on PATH"))
+                return
+            }
+        val realSid = command.claudeSessionId?.takeIf { !it.startsWith("proc:") }
+        val args = buildList {
+            add(claude)
+            if (realSid != null) { add("--resume"); add(realSid) } else add("--continue")
+            add("--print"); add(task)
+        }
+        try {
+            val result = withContext(Dispatchers.IO) {
+                val pb = ProcessBuilder(args).directory(File(cwd))
+                    .redirectError(ProcessBuilder.Redirect.DISCARD) // keep stdout (the reply) clean
+                val proc = pb.start()
+                proc.outputStream.close() // EOF on claude's stdin so it uses the arg, not piped input
+                val output = proc.inputStream.bufferedReader().readText()
+                val finished = proc.waitFor(10, TimeUnit.MINUTES)
+                if (!finished) proc.destroyForcibly()
+                Triple(finished, if (finished) proc.exitValue() else -1, output)
+            }
+            val (finished, code, output) = result
+            if (finished && code == 0) {
+                val summary = output.trim().lineSequence().firstOrNull()?.take(160) ?: "task completed"
+                emitActivity(ActivityEvent(command.claudeSessionId ?: cwd, "task_response", null, cwd, summary, output.take(8000), now()))
+                emitResult(ControlResult(command.commandId, "delivered", command.claudeSessionId, null))
+            } else {
+                val reason = if (!finished) "claude timed out" else "claude exited $code: ${output.take(400)}"
+                emitResult(ControlResult(command.commandId, "undeliverable", command.claudeSessionId, reason))
+            }
+        } catch (e: Exception) {
+            emitResult(ControlResult(command.commandId, "undeliverable", command.claudeSessionId, e.message))
+        }
+    }
+
+    /** Locate the `claude` CLI; a launchd/service PATH is minimal, so check common install dirs too. */
+    private fun resolveClaude(): String? {
+        val home = System.getProperty("user.home")
+        val candidates = listOf(
+            "$home/.local/bin/claude", "$home/.claude/local/claude",
+            "/opt/homebrew/bin/claude", "/usr/local/bin/claude", "/usr/bin/claude",
+        )
+        candidates.firstOrNull { File(it).canExecute() }?.let { return it }
+        // Fall back to PATH lookup.
+        return System.getenv("PATH")?.split(File.pathSeparator)
+            ?.map { File(it, "claude") }?.firstOrNull { it.canExecute() }?.absolutePath
     }
 
     private suspend fun stop(command: ControlCommand) {

@@ -312,7 +312,7 @@ fun Application.configureRouting(deps: AppDeps) = routing {
         val commandId = deps.control.issue(
             type = "dispatch_task", machineId = target.machineId,
             sessionId = UUID.fromString(call.parameters["id"]), claudeSessionId = target.claudeSessionId,
-            instruction = instruction, operator = op.handle,
+            projectPath = target.projectPath, instruction = instruction, operator = op.handle,
         )
         call.respond(HttpStatusCode.Accepted, CommandAcceptedResponse(commandId.toString(), "pending"))
     }
