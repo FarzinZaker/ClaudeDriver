@@ -30,19 +30,23 @@ object HookInstaller {
 
     fun defaultSettingsFile(): File = File(System.getProperty("user.home"), ".claude/settings.json")
 
-    fun installToFile(file: File, port: Int, envVar: String) {
-        write(file, install(read(file), port, envVar))
+    fun installToFile(file: File, port: Int, token: String) {
+        write(file, install(read(file), port, token))
     }
 
-    fun teardownFile(file: File, envVar: String) {
-        if (file.exists()) write(file, teardown(read(file), envVar))
+    fun teardownFile(file: File) {
+        if (file.exists()) write(file, teardown(read(file)))
     }
 
-    /** Pure: return a settings object with our managed hooks installed. */
-    fun install(root: JsonObject, port: Int, envVar: String): JsonObject {
+    /**
+     * Pure: return a settings object with our managed hooks installed. The loopback receiver's token
+     * is baked directly into the Authorization header (no env var), so hooks authenticate for every
+     * Claude Code session started normally — nothing to export in the session's shell.
+     */
+    fun install(root: JsonObject, port: Int, token: String): JsonObject {
         // Activity hooks (non-blocking, → /hook) and the blocking approval hook (→ /approve).
-        val activityGroup = group("http://127.0.0.1:$port/hook", envVar, matcher = null, timeoutSeconds = null)
-        val approvalGroup = group("http://127.0.0.1:$port/approve", envVar, matcher = "Bash|Write|Edit", timeoutSeconds = 86400)
+        val activityGroup = group("http://127.0.0.1:$port/hook", token, matcher = null, timeoutSeconds = null)
+        val approvalGroup = group("http://127.0.0.1:$port/approve", token, matcher = "Bash|Write|Edit", timeoutSeconds = 86400)
         val existingHooks = root["hooks"] as? JsonObject ?: JsonObject(emptyMap())
         val newHooks = buildJsonObject {
             for (event in (existingHooks.keys + MANAGED_EVENTS + "PreToolUse").distinct()) {
@@ -59,25 +63,24 @@ object HookInstaller {
             for ((k, v) in root) if (k !in RESERVED) put(k, v)
             put("hooks", newHooks)
             put("allowedHttpHookUrls", mergeStrings(root["allowedHttpHookUrls"], LOOPBACK_URL_PATTERN))
-            put("httpHookAllowedEnvVars", mergeStrings(root["httpHookAllowedEnvVars"], envVar))
         }
     }
 
-    private fun group(url: String, envVar: String, matcher: String?, timeoutSeconds: Int?) = buildJsonObject {
+    private fun group(url: String, token: String, matcher: String?, timeoutSeconds: Int?) = buildJsonObject {
         if (matcher != null) put("matcher", matcher)
         putJsonArray("hooks") {
             addJsonObject {
                 put("type", "http")
                 put("url", url)
-                putJsonObject("headers") { put("Authorization", "Bearer \$$envVar") }
-                putJsonArray("allowedEnvVars") { add(envVar) }
+                putJsonObject("headers") { put("Authorization", "Bearer $token") }
                 if (timeoutSeconds != null) put("timeout", timeoutSeconds)
             }
         }
     }
 
     /** Pure: return a settings object with our managed additions removed, user config preserved. */
-    fun teardown(root: JsonObject, envVar: String): JsonObject = buildJsonObject {
+    fun teardown(root: JsonObject): JsonObject = buildJsonObject {
+        // RESERVED (hooks, allowedHttpHookUrls, httpHookAllowedEnvVars) are rebuilt/dropped below.
         for ((k, v) in root) if (k !in RESERVED) put(k, v)
         (root["hooks"] as? JsonObject)?.let { hooks ->
             val cleaned = buildJsonObject {
@@ -90,8 +93,6 @@ object HookInstaller {
         }
         removeString(root["allowedHttpHookUrls"], LOOPBACK_URL_PATTERN).takeIf { it.isNotEmpty() }
             ?.let { put("allowedHttpHookUrls", JsonArray(it)) }
-        removeString(root["httpHookAllowedEnvVars"], envVar).takeIf { it.isNotEmpty() }
-            ?.let { put("httpHookAllowedEnvVars", JsonArray(it)) }
     }
 
     private fun isManaged(group: kotlinx.serialization.json.JsonElement): Boolean {

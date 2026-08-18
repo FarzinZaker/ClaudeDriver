@@ -14,20 +14,22 @@ class HookInstallerTest {
         tmp.writeText(
             """{"model":"opus","hooks":{"Notification":[{"hooks":[{"type":"command","command":"echo hi"}]}]}}""",
         )
-        val envVar = "CLAUDEDRIVER_HOOK_TOKEN"
+        val token = "secret-hook-token-123"
 
-        HookInstaller.installToFile(tmp, 8765, envVar)
+        HookInstaller.installToFile(tmp, 8765, token)
         val afterInstall = tmp.readText()
         assertTrue(afterInstall.contains("127.0.0.1:8765/hook"), "managed activity hook installed")
         assertTrue(afterInstall.contains("127.0.0.1:8765/approve"), "blocking approval hook installed")
         assertTrue(afterInstall.contains("PreToolUse"), "PreToolUse approval hook present")
+        assertTrue(afterInstall.contains("Bearer $token"), "token baked into the Authorization header")
+        assertFalse(afterInstall.contains("httpHookAllowedEnvVars"), "no env-var dependency")
         assertTrue(afterInstall.contains("echo hi"), "user hook preserved")
         assertTrue(afterInstall.contains("opus"), "user config preserved")
 
-        HookInstaller.installToFile(tmp, 8765, envVar)
+        HookInstaller.installToFile(tmp, 8765, token)
         assertEquals(afterInstall, tmp.readText(), "re-install is idempotent")
 
-        HookInstaller.teardownFile(tmp, envVar)
+        HookInstaller.teardownFile(tmp)
         val afterTeardown = tmp.readText()
         assertFalse(afterTeardown.contains("127.0.0.1"), "managed hook removed")
         assertTrue(afterTeardown.contains("echo hi"), "user hook still present")
