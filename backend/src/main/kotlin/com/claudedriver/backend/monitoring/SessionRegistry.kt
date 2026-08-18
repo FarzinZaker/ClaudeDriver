@@ -148,13 +148,17 @@ class SessionRegistry(
                 val proj = s[Sessions.projectPath]
                 val present = proj != null && proj in liveCwds
                 if (present) {
-                    // Keep a present session fresh so the staleness sweep doesn't retire it.
+                    // Keep a present session fresh so the staleness sweep doesn't retire it, and
+                    // revive one that already went stale (e.g. after an agent reconnect).
+                    val wasStale = s[Sessions.state] == SessionState.UNKNOWN_STALE.wire
+                    val nextState = if (wasStale) SessionState.RUNNING.wire else s[Sessions.state]
                     Sessions.update({ Sessions.id eq s[Sessions.id] }) {
                         it[processPresent] = true
                         it[lastActivityAt] = now
+                        if (wasStale) it[state] = SessionState.RUNNING.wire
                     }
-                    if (!s[Sessions.processPresent]) {
-                        out += SessionUpdate(s[Sessions.id].toString(), machineId.toString(), proj, s[Sessions.state], now.toString(), true)
+                    if (!s[Sessions.processPresent] || wasStale) {
+                        out += SessionUpdate(s[Sessions.id].toString(), machineId.toString(), proj, nextState, now.toString(), true)
                     }
                 } else if (s[Sessions.processPresent]) {
                     Sessions.update({ Sessions.id eq s[Sessions.id] }) { it[processPresent] = false }
