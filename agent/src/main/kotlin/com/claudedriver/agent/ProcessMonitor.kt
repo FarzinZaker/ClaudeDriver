@@ -12,16 +12,25 @@ import java.time.Instant
  * changes. Cross-platform (Windows + macOS). The OS process does not expose Claude Code's session
  * id, so only pid / working directory / lifecycle are reported; the backend correlates by project.
  */
-class ProcessMonitor(private val intervalMillis: Long = 2000) {
+class ProcessMonitor(
+    private val intervalMillis: Long = 2000,
+    private val keepAliveMillis: Long = 10_000,
+) {
     private val os = SystemInfo().operatingSystem
 
     suspend fun run(emit: suspend (ProcessSnapshot) -> Unit) {
         var last: ProcessSnapshot? = null
+        var lastEmitMs = 0L
         while (true) {
             val snapshot = scan()
-            if (snapshot != last) {
+            val nowMs = System.currentTimeMillis()
+            // Emit immediately when the set changes, and otherwise as a heartbeat so the backend
+            // keeps the session fresh (its staleness threshold is 30s) and revives it after a
+            // reconnect — not only once at startup.
+            if (snapshot != last || nowMs - lastEmitMs >= keepAliveMillis) {
                 emit(snapshot)
                 last = snapshot
+                lastEmitMs = nowMs
             }
             delay(intervalMillis)
         }

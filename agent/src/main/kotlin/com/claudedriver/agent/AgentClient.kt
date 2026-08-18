@@ -166,7 +166,15 @@ class AgentClient(
         ).start()
 
         launch {
-            ProcessMonitor().run { snapshot -> emit(MessageType.PROCESS_SNAPSHOT, snapshot) }
+            var lastSig = ""
+            ProcessMonitor().run { snapshot ->
+                val sig = snapshot.processes.joinToString { "${it.pid}:${it.projectPath}" }
+                if (sig != lastSig) {
+                    lastSig = sig
+                    println("Detected ${snapshot.processes.size} Claude Code process(es): ${snapshot.processes.map { it.projectPath ?: "<no-cwd>" }}")
+                }
+                emit(MessageType.PROCESS_SNAPSHOT, snapshot)
+            }
         }
 
         sessionController = SessionController(
