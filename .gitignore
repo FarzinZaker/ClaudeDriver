@@ -54,3 +54,6 @@ web/dist/
 
 ### Deploy secrets (never commit) ###
 deploy/
+
+# Windows shim binaries are built into agent resources at build time (agent/shim-win/build.sh)
+agent/src/main/resources/claude-shim-win-*.exe
