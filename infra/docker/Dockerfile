@@ -10,6 +10,16 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
+# ---- Stage 0b: cross-compile the transparent Windows ConPTY shim ----
+# A single static claude.exe per arch (stdlib-only Go), bundled into the agent so
+# ShimInstaller can install it on Windows. Built here so the JDK stage needs no Go.
+FROM golang:1.27 AS winshim
+WORKDIR /shim
+COPY agent/shim-win/ ./
+RUN mkdir -p /out \
+    && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/claude-shim-win-amd64.exe . \
+    && GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/claude-shim-win-arm64.exe .
+
 # ---- Stage 1: build the Ktor backend distribution with Gradle ----
 # Produces backend/build/install/backend/ (an install/distribution with a
 # launch script under bin/ and libs under lib/) via `:backend:installDist`.
@@ -27,6 +37,10 @@ COPY gradle.properties* ./
 COPY shared ./shared
 COPY backend ./backend
 COPY agent ./agent
+
+# Drop the prebuilt Windows shims into agent resources; the Gradle buildWindowsShim
+# task finds no Go here and skips, so these copied binaries are what get bundled.
+COPY --from=winshim /out/claude-shim-win-amd64.exe /out/claude-shim-win-arm64.exe ./agent/src/main/resources/
 
 RUN chmod +x ./gradlew \
     && ./gradlew --no-daemon :backend:installDist :agent:distZip \
