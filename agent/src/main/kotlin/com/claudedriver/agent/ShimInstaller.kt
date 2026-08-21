@@ -16,7 +16,7 @@ object ShimInstaller {
     private val RC_FILES = listOf(".zshrc", ".bashrc", ".profile")
 
     fun binDir(home: File) = File(home, ".claudedriver/bin")
-    fun shimFile(home: File) = File(binDir(home), "claude")
+    fun shimFile(home: File) = File(binDir(home), if (isWindows()) "claude.exe" else "claude")
 
     /** The PATH-prepend block, marker-guarded so it is idempotent and cleanly removable. */
     fun rcBlock(binDir: File): String = buildString {
@@ -33,18 +33,63 @@ object ShimInstaller {
     fun install(home: File): Boolean {
         val bin = binDir(home)
         if (realClaudeOutside(bin) == null) return false // nothing to fall through to → don't install
+        return if (isWindows()) installWindows(home, bin) else installPosix(home, bin)
+    }
+
+    private fun installPosix(home: File, bin: File): Boolean {
         bin.mkdirs()
-        val shim = shimFile(home)
-        shim.writeText(readShimResource())
+        val shim = File(bin, "claude")
+        shim.writeText(readShimResource("/claude-shim.py"))
         shim.setExecutable(true, false)
         RC_FILES.map { File(home, it) }.filter { it.exists() || it.name == ".zshrc" }
             .forEach { ensureRcBlock(it, bin) }
         return true
     }
 
-    /** Remove the shim + every marker-guarded PATH block. Idempotent. */
+    /**
+     * Windows: drop the arch-matched native shim at `%USERPROFILE%\.claudedriver\bin\claude.exe`
+     * and prepend that dir to the user PATH (HKCU\Environment) so new consoles pick it up. Returns
+     * false if the native shim was not bundled into this build (dev/test jars) — never throws.
+     */
+    private fun installWindows(home: File, bin: File): Boolean {
+        val exeBytes = readBinaryResource("/claude-shim-win-${winArch()}.exe") ?: return false
+        bin.mkdirs()
+        File(bin, "claude.exe").writeBytes(exeBytes)
+        prependWindowsUserPath(bin)
+        return true
+    }
+
+    /** Prepend [bin] to the persistent user PATH via `reg`, if not already the first entry. */
+    private fun prependWindowsUserPath(bin: File) {
+        val current = readWindowsUserPath()
+        val updated = windowsPrependPath(current, bin.absolutePath)
+        if (updated == current) return
+        runCatching {
+            ProcessBuilder("reg", "add", "HKCU\\Environment", "/v", "Path", "/t", "REG_EXPAND_SZ", "/d", updated, "/f")
+                .redirectErrorStream(true).start().waitFor()
+        }
+    }
+
+    private fun readWindowsUserPath(): String = runCatching {
+        val p = ProcessBuilder("reg", "query", "HKCU\\Environment", "/v", "Path").redirectErrorStream(true).start()
+        val out = p.inputStream.bufferedReader().readText()
+        p.waitFor()
+        // A REG_SZ/REG_EXPAND_SZ line looks like: "    Path    REG_EXPAND_SZ    C:\a;C:\b"
+        out.lineSequence().firstOrNull { it.trimStart().startsWith("Path", ignoreCase = true) }
+            ?.substringAfter("REG_")?.substringAfter("SZ")?.trim().orEmpty()
+    }.getOrDefault("")
+
+    /** Pure: put [binPath] first in a `;`-delimited PATH, removing any existing copy. */
+    internal fun windowsPrependPath(current: String, binPath: String): String {
+        val parts = current.split(';').map { it.trim() }.filter { it.isNotEmpty() && !it.equals(binPath, ignoreCase = true) }
+        return (listOf(binPath) + parts).joinToString(";")
+    }
+
+    /** Remove the shim + every marker-guarded PATH block. Idempotent. (POSIX rc side; the Windows
+     *  user-PATH entry is left for the uninstaller, which owns registry changes.) */
     fun teardown(home: File) {
-        shimFile(home).delete()
+        File(binDir(home), "claude").delete()
+        File(binDir(home), "claude.exe").delete()
         RC_FILES.map { File(home, it) }.filter { it.exists() }.forEach { stripRcBlock(it) }
     }
 
@@ -74,21 +119,30 @@ object ShimInstaller {
         return result
     }
 
-    /** The first `claude` on PATH that is NOT inside [binDir]; null if there is none. */
+    /** The first real `claude` launcher on PATH that is NOT inside [binDir]; null if there is none. */
     fun realClaudeOutside(binDir: File): File? {
-        val onPath = System.getenv("PATH")?.split(File.pathSeparator).orEmpty()
-            .map { File(it, "claude") }
-            .firstOrNull { it.canExecute() && it.parentFile?.canonicalFile != binDir.canonicalFile }
-        if (onPath != null) return onPath
+        val names = if (isWindows()) listOf("claude.exe", "claude.cmd", "claude.bat", "claude") else listOf("claude")
+        fun ok(f: File) = f.canExecute() && f.parentFile?.canonicalFile != binDir.canonicalFile
+        System.getenv("PATH")?.split(File.pathSeparator).orEmpty().forEach { dir ->
+            names.forEach { n -> File(dir, n).takeIf(::ok)?.let { return it } }
+        }
         val home = System.getProperty("user.home")
         return listOf(
             "$home/.local/bin/claude", "$home/.claude/local/claude",
             "/opt/homebrew/bin/claude", "/usr/local/bin/claude", "/usr/bin/claude",
-        ).map { File(it) }.firstOrNull { it.canExecute() && it.parentFile?.canonicalFile != binDir.canonicalFile }
+        ).map { File(it) }.firstOrNull(::ok)
     }
 
-    private fun readShimResource(): String =
-        ShimInstaller::class.java.getResourceAsStream("/claude-shim.py")
+    fun isWindows(): Boolean = System.getProperty("os.name").orEmpty().lowercase().contains("win")
+
+    private fun winArch(): String =
+        if (System.getProperty("os.arch").orEmpty().lowercase().contains("aarch64")) "arm64" else "amd64"
+
+    private fun readShimResource(path: String): String =
+        ShimInstaller::class.java.getResourceAsStream(path)
             ?.bufferedReader()?.use { it.readText() }
-            ?: error("bundled claude-shim.py resource missing")
+            ?: error("bundled shim resource missing: $path")
+
+    private fun readBinaryResource(path: String): ByteArray? =
+        ShimInstaller::class.java.getResourceAsStream(path)?.use { it.readBytes() }
 }

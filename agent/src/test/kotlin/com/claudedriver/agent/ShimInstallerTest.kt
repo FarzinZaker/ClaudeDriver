@@ -42,6 +42,20 @@ class ShimInstallerTest {
     }
 
     @Test
+    fun `windowsPrependPath puts bin first and de-duplicates case-insensitively`() {
+        val bin = """C:\Users\u\.claudedriver\bin"""
+        // Fresh prepend.
+        assertEquals("$bin;C:\\Windows;C:\\tools", ShimInstaller.windowsPrependPath("C:\\Windows;C:\\tools", bin))
+        // Already present (different case) → moved to front, no duplicate.
+        val withDup = "C:\\Windows;c:\\users\\u\\.claudedriver\\BIN;C:\\tools"
+        val result = ShimInstaller.windowsPrependPath(withDup, bin)
+        assertTrue(result.startsWith("$bin;"), "bin dir first")
+        assertEquals(1, Regex(Regex.escape(".claudedriver"), RegexOption.IGNORE_CASE).findAll(result).count(), "no duplicate bin entry")
+        // Empty PATH.
+        assertEquals(bin, ShimInstaller.windowsPrependPath("", bin))
+    }
+
+    @Test
     fun `install refuses when no real claude exists to fall through to`() {
         // A temp HOME whose bin dir is the only place a `claude` could be — realClaudeOutside is null.
         val home = Files.createTempDirectory("cd-home").toFile()
